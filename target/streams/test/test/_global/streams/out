@@ -1,5 +1,0 @@
-[debug] Running TaskDef(brasp.TranslatorSuite, CustomFingerprint{suite='munit.Suite'}, false, [SuiteSelector])
-[debug] Summary for munit not available.
-[info] Passed: Total 8, Failed 0, Errors 0, Passed 8
-[debug] Passed tests:
-[debug] 	brasp.TranslatorSuite
