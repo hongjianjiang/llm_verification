@@ -1,0 +1,88 @@
+[debug] > Exec(early(addDefaultCommands), None, None)
+[debug] > Exec(addDefaultCommands, None, None)
+[debug] > Exec(early(initialize), None, None)
+[debug] > Exec(initialize, None, None)
+[debug] > Exec(boot, None, None)
+[debug] > Exec(writeSbtVersion, None, None)
+[debug] > Exec(reload, None, None)
+[debug] > Exec(sbtStashOnFailure, None, None)
+[debug] > Exec(onFailure loadFailed, None, None)
+[debug] > Exec(loadp, None, None)
+[info] welcome to sbt 1.12.0 (Oracle Corporation Java 24)
+[debug] Load.defaultLoad until apply took 106.856949ms
+[debug]           Load.loadUnit: plugins took 78.246725ms
+[debug]           Load.loadUnit: defsScala took 0.454556ms
+[debug] [Loading] Scanning directory /Users/alexander/work/brasp_verification/project
+[debug] [Loading] Found non-root projects 
+[debug] [Loading] Done in /Users/alexander/work/brasp_verification/project, returning: ()
+[debug] deducing auto plugins based on known facts Set(Atom(sbt.plugins.CorePlugin)) and clauses Clauses(Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.IvyPlugin)))
+[debug] Clause(Atom(sbt.ScriptedPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.SbtPlugin),Set(Atom(sbt.ScriptedPlugin)))
+[debug] Clause(Atom(sbt.plugins.SemanticdbPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.JUnitXmlReportPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.MiniDependencyTreePlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.CorePlugin),Set(Atom(sbt.plugins.IvyPlugin)))
+[debug] Clause(Atom(sbt.plugins.IvyPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.SemanticdbPlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.JUnitXmlReportPlugin)))
+[debug] Clause(Atom(sbt.plugins.CorePlugin),Set(Atom(sbt.plugins.Giter8TemplatePlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.MiniDependencyTreePlugin))))
+[debug]   :: deduced result: Matched(sbt.plugins.CorePlugin,sbt.plugins.Giter8TemplatePlugin,sbt.plugins.IvyPlugin,sbt.plugins.JvmPlugin,sbt.plugins.MiniDependencyTreePlugin,sbt.plugins.JUnitXmlReportPlugin,sbt.plugins.SemanticdbPlugin)
+[debug] Plugins.deducer#function took 27.973123 ms
+[debug]               Load.resolveProject(brasp_verification-build) took 49.311598ms
+[debug]             Load.loadTransitive: finalizeProject(Project(id brasp_verification-build, base: /Users/alexander/work/brasp_verification/project, plugins: List(<none>))) took 103.935764ms
+[debug] [Loading] Done in /Users/alexander/work/brasp_verification/project, returning: (brasp_verification-build)
+[debug]           Load.loadUnit: loadedProjectsRaw took 135.295821ms
+[debug]           Load.loadUnit: cleanEvalClasses took 0.278755ms
+[debug]         Load.loadUnit(file:/Users/alexander/work/brasp_verification/project/, ...) took 221.85219ms
+[debug]       Load.apply: load took 673.703575ms
+[debug]       Load.apply: resolveProjects took 11.795993ms
+[debug]       Load.apply: finalTransforms took 84.497536ms
+[debug]       Load.apply: config.delegates took 13.795904ms
+[debug]       Load.apply: Def.make(settings)... took 411.885936ms
+[debug]       Load.apply: structureIndex took 110.086978ms
+[debug]       Load.apply: mkStreams took 1.242215ms
+[info] loading project definition from /Users/alexander/work/brasp_verification/project
+[debug] Running task... Cancel: Signal, check cycles: false, forcegc: true
+[debug]     Load.loadUnit: plugins took 2147.855836ms
+[debug]     Load.loadUnit: defsScala took 0.006781ms
+[debug] [Loading] Scanning directory /Users/alexander/work/brasp_verification
+[debug]       Load.loadUnit: mkEval took 7.014638ms
+[debug] [Loading] Found root project root w/ remaining 
+[debug] deducing auto plugins based on known facts Set(Atom(sbt.plugins.CorePlugin)) and clauses Clauses(Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.IvyPlugin)))
+[debug] Clause(Atom(sbt.ScriptedPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.SbtPlugin),Set(Atom(sbt.ScriptedPlugin)))
+[debug] Clause(Atom(sbt.plugins.SemanticdbPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.JUnitXmlReportPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.MiniDependencyTreePlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.CorePlugin),Set(Atom(sbt.plugins.IvyPlugin)))
+[debug] Clause(Atom(sbt.plugins.IvyPlugin),Set(Atom(sbt.plugins.JvmPlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.SemanticdbPlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.JUnitXmlReportPlugin)))
+[debug] Clause(Atom(sbt.plugins.CorePlugin),Set(Atom(sbt.plugins.Giter8TemplatePlugin)))
+[debug] Clause(Atom(sbt.plugins.JvmPlugin),Set(Atom(sbt.plugins.MiniDependencyTreePlugin))))
+[debug]   :: deduced result: Matched(sbt.plugins.CorePlugin,sbt.plugins.Giter8TemplatePlugin,sbt.plugins.IvyPlugin,sbt.plugins.JvmPlugin,sbt.plugins.MiniDependencyTreePlugin,sbt.plugins.JUnitXmlReportPlugin,sbt.plugins.SemanticdbPlugin)
+[debug] Plugins.deducer#function took 1.682386 ms
+[info] loading settings for project root from build.sbt...
+[debug]         Load.resolveProject(root) took 2.217262ms
+[debug]       Load.loadTransitive: finalizeProject(Project(id root, base: /Users/alexander/work/brasp_verification, plugins: List(<none>))) took 4.767112ms
+[debug] [Loading] Done in /Users/alexander/work/brasp_verification, returning: (root)
+[debug]     Load.loadUnit: loadedProjectsRaw took 153.685413ms
+[debug]     Load.loadUnit: cleanEvalClasses took 3.615493ms
+[debug]   Load.loadUnit(file:/Users/alexander/work/brasp_verification/, ...) took 2306.756795ms
+[debug] Load.apply: load took 2332.318407ms
+[debug] Load.apply: resolveProjects took 0.103731ms
+[debug] Load.apply: finalTransforms took 12.044782ms
+[debug] Load.apply: config.delegates took 0.292321ms
+[debug] Load.apply: Def.make(settings)... took 85.942096ms
+[debug] Load.apply: structureIndex took 26.950149ms
+[debug] Load.apply: mkStreams took 0.002687ms
+[info] set current project to brasp-verification (in build file:/Users/alexander/work/brasp_verification/)
+[debug] Running task... Cancel: Signal, check cycles: false, forcegc: true
+[debug] > Exec(sbtPopOnFailure, None, None)
+[debug] > Exec(resumeFromFailure, None, None)
+[debug] > Exec(notifyUsersAboutShell, None, None)
+[debug] > Exec(iflast shell, None, None)
+[debug] > Exec(runMain brasp.Translator examples/last_a.json, None, None)
+[debug] Evaluating tasks: Compile / runMain
+[debug] Running task... Cancel: Signal, check cycles: false, forcegc: true

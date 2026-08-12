@@ -1,0 +1,56 @@
+[debug] Separate classpath projects and all dependencies start:
+[debug] Separate classpath projects and all dependencies end. Took 3 ms
+[debug] Collect only external dependencies start:
+[debug] Collect only external dependencies end. Took 1 ms
+[debug] Collect excluded jar names start:
+[debug] Collect excluded jar names end. Took 1 ms
+[debug] Filter jars start:
+[debug] Filter jars end. Took 0 ms
+[debug] Collect and shade project classes start:
+[debug] Collect and shade project classes end. Took 1 ms
+[debug] Collect and shade dependency entries start:
+[debug] Collect and shade dependency entries end. Took 11 ms
+[debug] Collect renames start:
+[debug] Collect renames end. Took 76 ms
+[debug] Process renames start:
+[debug] Process renames end. Took 22 ms
+[debug] Collect all merge strategies for cache check start:
+[debug] Collect all merge strategies for cache check end. Took 56 ms
+[debug] Building assembly jar due to changed inputs...
+[debug] Merge all conflicting jar entries (including those renamed) start:
+[debug] Merge all conflicting jar entries (including those renamed) end. Took 214 ms
+[debug] Report merge results start:
+[info] 2 file(s) merged using strategy 'Rename' (Run the task at debug level to see the details)
+[debug] 
+[debug] Merge Strategy Used: Rename
+[debug] Resulting entries:
+[debug]   Jar entry = LICENSE_scala-library-2.13.14
+[debug] Merge origins:
+[debug]   Jar name = scala-library-2.13.14.jar, jar org = org.scala-lang, entry target = LICENSE
+[debug] 
+[debug] Merge Strategy Used: Rename
+[debug] Resulting entries:
+[debug]   Jar entry = NOTICE_scala-library-2.13.14
+[debug] Merge origins:
+[debug]   Jar name = scala-library-2.13.14.jar, jar org = org.scala-lang, entry target = NOTICE
+[info] 2 file(s) merged using strategy 'Discard' (Run the task at debug level to see the details)
+[debug] 
+[debug] Merge Strategy Used: Discard
+[debug] Resulting entries:
+[debug]   None
+[debug] Merge origins:
+[debug]   Jar name = scala-library-2.13.14.jar, jar org = org.scala-lang, entry target = META-INF/MANIFEST.MF
+[debug]   Jar name = scala3-library_3-3.5.1.jar, jar org = org.scala-lang, entry target = META-INF/MANIFEST.MF
+[debug] Report merge results end. Took 5 ms
+[debug] Finding remaining conflicts that were not merged start:
+[debug] Finding remaining conflicts that were not merged end. Took 25 ms
+[debug] Sort/Parallelize merged entries start:
+[debug] Sort/Parallelize merged entries end. Took 12 ms
+[debug] Create jar start:
+[debug] Create jar end. Took 730 ms
+[debug] Hash newly-built Jar start:
+[debug] Hash newly-built Jar end. Took 10 ms
+[info] Built: /Users/alexander/work/brasp_verification/target/scala-3.5.1/brasp-verification.jar
+[info] Jar hash: 84b3e4e7ff0602f587e83eab1d5058f29a127b7a
+[debug] Close library jar references start:
+[debug] Close library jar references end. Took 0 ms

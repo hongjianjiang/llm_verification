@@ -1,0 +1,16 @@
+# Accepts words whose last two symbols are identical.
+alphabet a b
+
+is_a = symbol a
+is_b = symbol b
+
+always    = const true
+prev_is_a = rightmost(always@j, is_a@j)
+prev_is_b = rightmost(always@j, is_b@j)
+
+both_a = is_a & prev_is_a
+both_b = is_b & prev_is_b
+
+last_two_equal = both_a | both_b
+
+output last_two_equal

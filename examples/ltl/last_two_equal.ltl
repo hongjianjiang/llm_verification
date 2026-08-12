@@ -1,0 +1,14 @@
+logic past-strict
+alphabet a b
+
+is_a := sym(a)@i
+is_b := sym(b)@i
+always := true
+prev_is_a := (!(always@j)) S ((always@j & is_a@j))
+prev_is_b := (!(always@j)) S ((always@j & is_b@j))
+both_a := (is_a@i & prev_is_a@i)
+both_b := (is_b@i & prev_is_b@i)
+last_two_equal := (both_a@i | both_b@i)
+
+output := last_two_equal@i
+evaluate at i = |w| (the final input position)

@@ -1,0 +1,6 @@
+# Accepts every word over {a, b}.
+alphabet a b
+
+yes = const true
+
+output yes

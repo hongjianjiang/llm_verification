@@ -1,0 +1,28 @@
+# Accepts exactly the single word "baa" (b, a, a) and nothing else --
+# not the empty word, not "ba" or "aa", and not longer words that merely
+# end in "baa" (e.g. "abaa").
+alphabet a b
+
+is_a   = symbol a
+is_b   = symbol b
+is_bos = bos
+always = const true
+
+# rightmost(true, X@j) always selects the immediate predecessor position
+# (the LTL "Previous"/Y trick). Nesting it re-queries an already-shifted
+# value at its own witness, walking one more position back each time.
+prev_is_a = rightmost(always@j, is_a@j)
+prev_is_b = rightmost(always@j, is_b@j)
+
+# two positions before the end
+back2_is_b = rightmost(always@j, prev_is_b@j)
+
+# walk the same "previous" chain on is_bos three times: back3_is_bos(i)
+# is true iff i == 3, i.e. the word is exactly 3 symbols long.
+prev_is_bos  = rightmost(always@j, is_bos@j)
+back2_is_bos = rightmost(always@j, prev_is_bos@j)
+back3_is_bos = rightmost(always@j, back2_is_bos@j)
+
+is_baa = is_a & prev_is_a & back2_is_b & back3_is_bos
+
+output is_baa

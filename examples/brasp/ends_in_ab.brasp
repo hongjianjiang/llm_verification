@@ -1,0 +1,14 @@
+# Accepts words that end in "ab".
+alphabet a b
+
+is_a = symbol a
+is_b = symbol b
+
+# rightmost(true, ...) always picks the immediately preceding position:
+# this reconstructs the LTL "Previous" (Y) operator from attention.
+always     = const true
+prev_is_a  = rightmost(always@j, is_a@j)
+
+ends_in_ab = is_b & prev_is_a
+
+output ends_in_ab

@@ -1,0 +1,6 @@
+[debug] [zinc] IncrementalCompile -----------
+[debug] IncrementalCompile.incrementalCompile
+[debug] previous = Stamps for: 161 products, 13 sources, 2 libraries
+[debug] current source = Set(${BASE}/src/main/scala/lustre/Lustre.scala, ${BASE}/src/main/scala/pvwaa/Pvwaa.scala, ${BASE}/src/main/scala/ltl/Ltl.scala, ${BASE}/src/main/scala/translator/BraspToLtl.scala, ${BASE}/src/main/scala/translator/Translator.scala, ${BASE}/src/main/scala/inclusion/Inclusion.scala, ${BASE}/src/main/scala/brasp/BraspText.scala, ${BASE}/src/main/scala/ltl/LtlText.scala, ${BASE}/src/main/scala/boolean_automaton/BooleanAutomaton.scala, ${BASE}/src/main/scala/translator/LtlToBrasp.scala, ${BASE}/src/main/scala/brasp/Brasp.scala, ${BASE}/src/main/scala/kind2/Kind2.scala, ${BASE}/src/main/scala/json/Json.scala)
+[debug] > initialChanges = InitialChanges(Changes(added = Set(), removed = Set(), changed = Set(), unmodified = ...),Set(),Set(),API Changes: Set())
+[debug] No changes

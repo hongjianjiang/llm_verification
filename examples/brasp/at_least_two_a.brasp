@@ -1,0 +1,9 @@
+alphabet a b
+
+is_a = symbol a
+a_before = rightmost(is_a@j & true | !!is_a@j, is_a@j & true)
+two_a_before = rightmost(is_a@j & a_before@j | !!is_a@j, is_a@j & a_before@j)
+last_is_second_a = is_a & a_before
+at_least_two_a = two_a_before | last_is_second_a
+
+output at_least_two_a

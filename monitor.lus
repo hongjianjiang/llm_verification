@@ -1,0 +1,42 @@
+-- symbol = 0 represents input symbol 'a'.
+-- symbol = 1 represents input symbol 'b'.
+node brasp_monitor(symbol: int; valid: bool; start: bool; last: bool) returns (accept_prefix: bool; accept_word: bool; input_ok: bool);
+var
+  old_s_0_0: bool;
+  cur_s_0_0: bool;
+  old_s_1_0: bool;
+  cur_s_1_0: bool;
+  old_s_2_0: bool;
+  cur_s_2_0: bool;
+  old_s_3_0: bool;
+  cur_s_3_0: bool;
+  old_v_0: bool;
+  old_v_1: bool;
+  old_v_2: bool;
+  old_v_3: bool;
+  cur_v_0: bool;
+  cur_v_1: bool;
+  cur_v_2: bool;
+  cur_v_3: bool;
+let
+  old_s_0_0 = false -> (if start then false else pre(cur_s_0_0));
+  old_s_1_0 = true -> (if start then true else pre(cur_s_1_0));
+  old_s_2_0 = false -> (if start then false else pre(cur_s_2_0));
+  old_s_3_0 = true -> (if start then true else pre(cur_s_3_0));
+  old_v_0 = old_s_0_0;
+  old_v_1 = old_s_1_0;
+  old_v_2 = old_s_2_0;
+  old_v_3 = old_s_3_0;
+  cur_s_0_0 = if not valid then old_s_0_0 else (if symbol = 0 then true else (if symbol = 1 then false else old_s_0_0));
+  cur_s_1_0 = if not valid then old_s_1_0 else (if symbol = 0 then false else (if symbol = 1 then true else old_s_1_0));
+  cur_s_2_0 = if not valid then old_s_2_0 else (if symbol = 0 then ((old_v_0 and old_v_0) or (old_v_1 and old_s_2_0)) else (if symbol = 1 then ((old_v_0 and old_v_0) or (old_v_1 and old_s_2_0)) else old_s_2_0));
+  cur_s_3_0 = if not valid then old_s_3_0 else (if symbol = 0 then ((old_v_1 or old_v_1) and (old_v_0 or old_s_3_0)) else (if symbol = 1 then ((old_v_1 or old_v_1) and (old_v_0 or old_s_3_0)) else old_s_3_0));
+  cur_v_0 = cur_s_0_0;
+  cur_v_1 = cur_s_1_0;
+  cur_v_2 = cur_s_2_0;
+  cur_v_3 = cur_s_3_0;
+  input_ok = not valid or (0 <= symbol and symbol < 2);
+  accept_prefix = cur_v_2;
+  accept_word = last and accept_prefix;
+tel
+
