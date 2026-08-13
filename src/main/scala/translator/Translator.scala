@@ -23,6 +23,15 @@ final case class CliArgs(
     runKind2: Boolean = false,
     kind2Bin: File,
     kind2Json: Boolean = false,
+    btor2: Boolean = false,
+    runRic3: Boolean = false,
+    ric3Bin: File,
+    ric3Mode: String = "ic3",
+    ric3Raw: Boolean = false,
+    aiger: Boolean = false,
+    runAbc: Boolean = false,
+    abcBin: File,
+    abcRaw: Boolean = false,
     json: Boolean = false,
     ltl: Boolean = false,
     dot: Boolean = false,
@@ -50,6 +59,14 @@ object Translator:
     val cwd = new File(System.getProperty("user.dir"))
     new File(cwd.getParentFile, "kind2")
 
+  private def defaultRic3Bin: File =
+    val cwd = new File(System.getProperty("user.dir"))
+    new File(cwd.getParentFile, "rIC3/target/release/ric3")
+
+  private def defaultAbcBin: File =
+    val cwd = new File(System.getProperty("user.dir"))
+    new File(cwd.getParentFile, "abc/abc")
+
   private def parseArgs(args: Array[String]): CliArgs =
     var input: Option[File] = None
     var future = false
@@ -62,6 +79,15 @@ object Translator:
     var runKind2 = false
     var kind2Bin: File = defaultKind2Bin
     var kind2Json = false
+    var btor2Out = false
+    var runRic3 = false
+    var ric3Bin: File = defaultRic3Bin
+    var ric3Mode = "ic3"
+    var ric3Raw = false
+    var aigerOut = false
+    var runAbc = false
+    var abcBin: File = defaultAbcBin
+    var abcRaw = false
     var jsonOut = false
     var ltlOut = false
     var dotOut = false
@@ -85,6 +111,15 @@ object Translator:
         case "--run-kind2"          => runKind2 = true
         case "--kind2-bin"          => kind2Bin = File(takeValue("--kind2-bin", it))
         case "--kind2-json"         => kind2Json = true
+        case "--btor2"              => btor2Out = true
+        case "--run-ric3"           => runRic3 = true
+        case "--ric3-bin"           => ric3Bin = File(takeValue("--ric3-bin", it))
+        case "--ric3-mode"          => ric3Mode = takeValue("--ric3-mode", it)
+        case "--ric3-raw"           => ric3Raw = true
+        case "--aiger"              => aigerOut = true
+        case "--run-abc"            => runAbc = true
+        case "--abc-bin"            => abcBin = File(takeValue("--abc-bin", it))
+        case "--abc-raw"            => abcRaw = true
         case "--json"               => jsonOut = true
         case "--ltl"                 => ltlOut = true
         case "--dot"                 => dotOut = true
@@ -108,6 +143,15 @@ object Translator:
       runKind2 = runKind2,
       kind2Bin = kind2Bin,
       kind2Json = kind2Json,
+      btor2 = btor2Out,
+      runRic3 = runRic3,
+      ric3Bin = ric3Bin,
+      ric3Mode = ric3Mode,
+      ric3Raw = ric3Raw,
+      aiger = aigerOut,
+      runAbc = runAbc,
+      abcBin = abcBin,
+      abcRaw = abcRaw,
       json = jsonOut,
       ltl = ltlOut,
       dot = dotOut,
@@ -232,7 +276,8 @@ object Translator:
 
         val needsBooleanAutomaton =
           parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined || parsed.kind2Safety ||
-            parsed.lustre || parsed.booleanAutomaton
+            parsed.lustre || parsed.booleanAutomaton || parsed.btor2 || parsed.runRic3 ||
+            parsed.aiger || parsed.runAbc
         if needsBooleanAutomaton then
           CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(translated))))
         else if parsed.pvwaa then
@@ -288,7 +333,51 @@ object Translator:
             case Some(code) => return code
             case None       => ()
           println(dot)
+        else if parsed.runRic3 || parsed.btor2 then
+          val goal =
+            if parsed.kind2Subset.isDefined then "inclusion"
+            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            else "safety"
+          val monitorName =
+            if parsed.kind2Subset.isDefined then "subset_monitor"
+            else if parsed.kind2Equivalent.isDefined then "equivalence_monitor"
+            else "brasp_monitor"
+          val model = Btor2.generateSafety(automaton, monitorName)
+          if parsed.runRic3 then
+            try
+              val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+              return Ric3.run(model, parsed.ric3Bin, goal, automaton.source.alphabet, emptyBad, parsed.ric3Mode, parsed.ric3Raw)
+            catch
+              case Ric3Error(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          println(model)
+        else if parsed.runAbc || parsed.aiger then
+          val goal =
+            if parsed.kind2Subset.isDefined then "inclusion"
+            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            else "safety"
+          val model =
+            try Aiger.generateSafety(automaton)
+            catch
+              case AigerError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          if parsed.runAbc then
+            try
+              val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+              return Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
+            catch
+              case AbcError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          System.out.write(model)
+          System.out.flush()
         else if parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined || parsed.kind2Safety then
+          val goal =
+            if parsed.kind2Subset.isDefined then "inclusion"
+            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            else "safety"
           val harness =
             if parsed.kind2Subset.isDefined then
               Kind2.generateSafety(automaton, monitorName = "subset_monitor", mainName = "kind2_subset")
@@ -296,12 +385,7 @@ object Translator:
               Kind2.generateSafety(automaton, monitorName = "equivalence_monitor", mainName = "kind2_equivalence")
             else Kind2.generateSafety(automaton)
           if parsed.runKind2 then
-            try
-              val goal =
-                if parsed.kind2Subset.isDefined then "inclusion"
-                else if parsed.kind2Equivalent.isDefined then "equivalence"
-                else "safety"
-              return Kind2.run(harness, parsed.kind2Bin, goal, automaton.source.alphabet, parsed.kind2Json)
+            try return Kind2.run(harness, parsed.kind2Bin, goal, automaton.source.alphabet, parsed.kind2Json)
             catch
               case Kind2Error(message) =>
                 System.err.println(s"translator: $message")

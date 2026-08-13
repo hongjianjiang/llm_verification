@@ -9,6 +9,140 @@ class TranslatorSuite extends munit.FunSuite:
     if n == 0 then List(Nil)
     else for first <- alphabet; rest <- wordsOfLength(n - 1, alphabet) yield first :: rest
 
+  /** A tiny BTOR2 interpreter covering exactly the op vocabulary `Btor2`
+    * emits (sort/zero/one/constd/input/state/init/next/eq/ite/and/or/ult/bad),
+    * used to check the encoder against `BooleanAutomaton.accepts` without a
+    * real BTOR2 solver. Returns, for a run over `symbolIndices`, whether
+    * `bad` holds after consuming each prefix (index `k` = word of length
+    * `k + 1`).
+    */
+  private def runBtor2(model: String, symbolIndices: IndexedSeq[Int]): List[Boolean] =
+    case class Op(keyword: String, args: List[Int])
+    val ops = scala.collection.mutable.Map.empty[Int, Op]
+    val consts = scala.collection.mutable.Map.empty[Int, Int]
+    val stateIds = scala.collection.mutable.Set.empty[Int]
+    val inputIds = scala.collection.mutable.Set.empty[Int]
+    val registerInit = scala.collection.mutable.Map.empty[Int, Int]
+    val registerNext = scala.collection.mutable.Map.empty[Int, Int]
+    val badIds = scala.collection.mutable.ArrayBuffer.empty[Int]
+
+    for line <- model.linesIterator if line.nonEmpty && !line.startsWith(";") do
+      val parts = line.trim.split("\\s+").toList
+      val id = parts.head.toInt
+      parts(1) match
+        case "sort"                    => ()
+        case "zero"                    => consts(id) = 0
+        case "one"                     => consts(id) = 1
+        case "constd"                  => consts(id) = parts(3).toInt
+        case "input"                   => inputIds += id
+        case "state"                   => stateIds += id
+        case "init"                    => registerInit(parts(3).toInt) = parts(4).toInt
+        case "next"                    => registerNext(parts(3).toInt) = parts(4).toInt
+        case "bad"                     => badIds += parts(2).toInt
+        case "constraint"              => ()
+        case "eq" | "ult"              => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt))
+        case "and" | "or"              => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt))
+        case "ite"                     => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt, parts(5).toInt))
+        case other                     => throw new RuntimeException(s"runBtor2: unsupported op '$other'")
+
+    var registers = stateIds.map(id => id -> consts(registerInit(id))).toMap
+    var currentInput = 0
+    def eval(id: Int, memo: scala.collection.mutable.Map[Int, Int]): Int =
+      memo.getOrElseUpdate(
+        id,
+        if stateIds.contains(id) then registers(id)
+        else if inputIds.contains(id) then currentInput
+        else
+          consts.get(id) match
+            case Some(v) => v
+            case None =>
+              val op = ops(id)
+              op.keyword match
+                case "eq"  => if eval(op.args(0), memo) == eval(op.args(1), memo) then 1 else 0
+                case "ult" => if eval(op.args(0), memo) < eval(op.args(1), memo) then 1 else 0
+                case "and" => if eval(op.args(0), memo) == 1 && eval(op.args(1), memo) == 1 then 1 else 0
+                case "or"  => if eval(op.args(0), memo) == 1 || eval(op.args(1), memo) == 1 then 1 else 0
+                case "ite" => if eval(op.args(0), memo) == 1 then eval(op.args(1), memo) else eval(op.args(2), memo)
+                case other => throw new RuntimeException(s"runBtor2: unsupported op '$other'"),
+      )
+
+    symbolIndices.map { symbol =>
+      currentInput = symbol
+      val memo = scala.collection.mutable.Map.empty[Int, Int]
+      val bad = badIds.exists(eval(_, memo) == 1)
+      registers = stateIds.map(id => id -> eval(registerNext(id), memo)).toMap
+      bad
+    }.toList
+
+  /** A tiny binary-AIGER interpreter covering exactly what `Aiger` emits
+    * (text header/latch-next-literals/output, then delta-encoded AND gates,
+    * then a `c` comment section it ignores), used the same way `runBtor2`
+    * is: to check the encoder — including its exact byte-level format,
+    * not just its node graph — against `BooleanAutomaton.accepts` without
+    * a real AIGER solver. Every latch is reset-to-0 by construction (see
+    * `Aiger`'s doc-comment), so unlike `runBtor2` there's no separate init
+    * value to read. Returns, for a run over `symbolIndices`, whether the
+    * output holds after consuming each prefix.
+    */
+  private def runAiger(model: Array[Byte], symbolIndices: IndexedSeq[Int]): List[Boolean] =
+    var pos = 0
+    def readLine(): String =
+      val start = pos
+      while model(pos) != '\n'.toByte do pos += 1
+      val line = new String(model, start, pos - start, java.nio.charset.StandardCharsets.US_ASCII)
+      pos += 1
+      line
+
+    val Array(_, i, l, o, a) = readLine().split("\\s+").tail.map(_.toInt)
+    val latchNextLits = (0 until l).map(_ => readLine().trim.toInt)
+    val outputLits = (0 until o).map(_ => readLine().trim.toInt)
+
+    def decodeDelta(): Int =
+      var value = 0
+      var shift = 0
+      var more = true
+      while more do
+        val byte = model(pos) & 0xff
+        pos += 1
+        value |= (byte & 0x7f) << shift
+        shift += 7
+        more = (byte & 0x80) != 0
+      value
+
+    val andOf = (0 until a).map { k =>
+      val outLit = 2 * (i + l + k + 1)
+      val rhsHigh = outLit - decodeDelta()
+      val rhsLow = rhsHigh - decodeDelta()
+      outLit -> (rhsHigh, rhsLow)
+    }.toMap
+
+    var latchState = (0 until l).map(k => 2 * (i + k + 1) -> 0).toMap // every latch resets to 0
+
+    def valueOf(literal: Int, inputVals: Map[Int, Int], memo: scala.collection.mutable.Map[Int, Int]): Int =
+      if literal == 0 then 0
+      else if literal == 1 then 1
+      else
+        val v = literal & ~1
+        val negated = literal & 1
+        val raw = memo.getOrElseUpdate(
+          v,
+          if latchState.contains(v) then latchState(v)
+          else if inputVals.contains(v) then inputVals(v)
+          else
+            andOf.get(v) match
+              case Some((aLit, bLit)) => valueOf(aLit, inputVals, memo) & valueOf(bLit, inputVals, memo)
+              case None                => throw new RuntimeException(s"runAiger: unknown variable $v"),
+        )
+        raw ^ negated
+
+    symbolIndices.map { symbol =>
+      val inputVals = (0 until i).map(bitPos => 2 * (bitPos + 1) -> ((symbol >> bitPos) & 1)).toMap
+      val memo = scala.collection.mutable.Map.empty[Int, Int]
+      val bad = valueOf(outputLits.head, inputVals, memo) == 1
+      latchState = latchNextLits.zipWithIndex.map { case (nextLit, k) => 2 * (i + k + 1) -> valueOf(nextLit, inputVals, memo) }.toMap
+      bad
+    }.toList
+
   test("brasp past LTL and future mirror agree") {
     val specification = obj(
       "alphabet" -> arr(str("a"), str("b")),
@@ -174,6 +308,161 @@ class TranslatorSuite extends munit.FunSuite:
       arr(obj("objectType" -> str("property"), "expr" -> str("(not bad)"), "answer" -> obj("value" -> str("valid"))))
     )
     assert(Kind2.summarize(report, goal = "equivalence").contains("the languages are equivalent"))
+  }
+
+  private def sampleAutomaton(alphabet: List[String] = List("a", "b")): ReverseBooleanAutomaton =
+    val specification = obj(
+      "alphabet" -> arr(alphabet.map(str)*),
+      "program" -> arr(
+        obj("name" -> str("bos"), "op" -> str("bos")),
+        obj("name" -> str("a"), "op" -> str("symbol"), "symbol" -> str(alphabet(0))),
+        obj("name" -> str("b"), "op" -> str("symbol"), "symbol" -> str(alphabet(1))),
+        obj(
+          "name" -> str("chosen"),
+          "op" -> str("rightmost"),
+          "score" -> obj(
+            "op" -> str("or"),
+            "args" -> arr(
+              obj("op" -> str("ref"), "name" -> str("a"), "at" -> str("j")),
+              obj(
+                "op" -> str("and"),
+                "args" -> arr(
+                  obj("op" -> str("ref"), "name" -> str("b"), "at" -> str("i")),
+                  obj("op" -> str("ref"), "name" -> str("b"), "at" -> str("j")),
+                ),
+              ),
+            ),
+          ),
+          "value" -> obj("op" -> str("not"), "arg" -> obj("op" -> str("ref"), "name" -> str("b"), "at" -> str("j"))),
+        ),
+        obj(
+          "name" -> str("after_bos"),
+          "op" -> str("rightmost"),
+          "score" -> obj("op" -> str("ref"), "name" -> str("bos"), "at" -> str("j")),
+          "value" -> obj("op" -> str("ref"), "name" -> str("b"), "at" -> str("i")),
+        ),
+        obj(
+          "name" -> str("output"),
+          "op" -> str("or"),
+          "args" -> arr(
+            obj("op" -> str("ref"), "name" -> str("chosen")),
+            obj("op" -> str("ref"), "name" -> str("after_bos")),
+          ),
+        ),
+      ),
+      "output" -> str("output"),
+    )
+    val past = BraspToLtl.translate(specification)
+    val future = Translator.mirrorToFuture(past)
+    val pvwaa = Pvwaa.fromFuture2ltl(future)
+    BooleanAutomaton.fromForwardPvwaa(pvwaa)
+
+  test("btor2 encoding matches BooleanAutomaton.accepts prefix-by-prefix") {
+    val alphabet = List("a", "b")
+    val automaton = sampleAutomaton(alphabet)
+    val model = Btor2.generateSafety(automaton)
+    assert(model.contains("bad "))
+    assert(model.contains("state 1"))
+    assert(model.contains("input "))
+
+    for
+      length <- 1 until 6
+      word <- wordsOfLength(length, alphabet)
+    do
+      val indices = word.map(alphabet.indexOf).toIndexedSeq
+      val expected = (1 to word.length).map(k => BooleanAutomaton.accepts(automaton, word.take(k).toIndexedSeq)).toList
+      assertEquals(runBtor2(model, indices), expected, s"word=$word")
+  }
+
+  test("btor2 encoding adds a range constraint for non-power-of-two alphabets") {
+    val alphabet = List("a", "b", "c")
+    val automaton = sampleAutomaton(alphabet)
+    val model = Btor2.generateSafety(automaton)
+    assert(model.contains("ult "))
+    assert(model.contains("constraint "))
+  }
+
+  test("btor2 encoding covers the --kind2-subset/--kind2-equivalent reduction too") {
+    val alphabet = List("a", "b")
+    val endsInA = sampleAutomaton(alphabet)
+    val subsetProgram = Inclusion.counterexampleProgram(
+      Brasp.fromJson(obj("alphabet" -> arr(str("a"), str("b")), "program" -> arr(obj("name" -> str("a"), "op" -> str("symbol"), "symbol" -> str("a"))), "output" -> str("a"))),
+      Brasp.fromJson(obj("alphabet" -> arr(str("a"), str("b")), "program" -> arr(obj("name" -> str("yes"), "op" -> str("const"), "value" -> bool(true))), "output" -> str("yes"))),
+    )
+    val ltl = BraspToLtl.translateProgram(subsetProgram)
+    val automaton = BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(Translator.mirrorToFuture(ltl)))
+    val model = Btor2.generateSafety(automaton, monitorName = "subset_monitor")
+    for
+      length <- 0 until 4
+      word <- wordsOfLength(length, alphabet)
+    do
+      val indices = word.map(alphabet.indexOf).toIndexedSeq
+      val expected = (1 to word.length).map(k => BooleanAutomaton.accepts(automaton, word.take(k).toIndexedSeq)).toList
+      assertEquals(runBtor2(model, indices), expected, s"word=$word")
+  }
+
+  test("aiger encoding matches BooleanAutomaton.accepts prefix-by-prefix") {
+    val alphabet = List("a", "b")
+    val automaton = sampleAutomaton(alphabet)
+    val model = Aiger.generateSafety(automaton)
+    val header = new String(model, 0, math.min(model.length, 64), java.nio.charset.StandardCharsets.US_ASCII)
+    assert(header.startsWith("aig "))
+    // AND gates are raw binary bytes with no newline separators, so the "c"
+    // comment marker isn't necessarily preceded by one.
+    assert(new String(model, java.nio.charset.StandardCharsets.US_ASCII).contains("c\n"))
+
+    for
+      length <- 1 until 6
+      word <- wordsOfLength(length, alphabet)
+    do
+      val indices = word.map(alphabet.indexOf).toIndexedSeq
+      val expected = (1 to word.length).map(k => BooleanAutomaton.accepts(automaton, word.take(k).toIndexedSeq)).toList
+      assertEquals(runAiger(model, indices), expected, s"word=$word")
+  }
+
+  test("aiger encoding rejects non-power-of-two alphabets") {
+    val alphabet = List("a", "b", "c")
+    val automaton = sampleAutomaton(alphabet)
+    intercept[AigerError] {
+      Aiger.generateSafety(automaton)
+    }
+  }
+
+  test("aiger encoding covers the --kind2-subset/--kind2-equivalent reduction too") {
+    val alphabet = List("a", "b")
+    val subsetProgram = Inclusion.counterexampleProgram(
+      Brasp.fromJson(obj("alphabet" -> arr(str("a"), str("b")), "program" -> arr(obj("name" -> str("a"), "op" -> str("symbol"), "symbol" -> str("a"))), "output" -> str("a"))),
+      Brasp.fromJson(obj("alphabet" -> arr(str("a"), str("b")), "program" -> arr(obj("name" -> str("yes"), "op" -> str("const"), "value" -> bool(true))), "output" -> str("yes"))),
+    )
+    val ltl = BraspToLtl.translateProgram(subsetProgram)
+    val automaton = BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(Translator.mirrorToFuture(ltl)))
+    val model = Aiger.generateSafety(automaton)
+    for
+      length <- 0 until 4
+      word <- wordsOfLength(length, alphabet)
+    do
+      val indices = word.map(alphabet.indexOf).toIndexedSeq
+      val expected = (1 to word.length).map(k => BooleanAutomaton.accepts(automaton, word.take(k).toIndexedSeq)).toList
+      assertEquals(runAiger(model, indices), expected, s"word=$word")
+  }
+
+  test("ric3 summarize reports proved/not-proved and the empty-word case statically") {
+    val proved = Ric3.summarize("UNSAT\n", goal = "safety", alphabet = List("a", "b"), emptyBad = false)
+    assert(proved.contains("PROVED"))
+    assert(proved.contains("✓ no nonempty bad prefix (unsat)"))
+
+    val emptyWordBad = Ric3.summarize("UNSAT\n", goal = "inclusion", alphabet = List("a", "b"), emptyBad = true)
+    assert(emptyWordBad.contains("NOT PROVED"))
+    assert(emptyWordBad.contains("✗ no empty-word counterexample (sat) — witness: ε"))
+
+    // rIC3's own log noise (from --ui false) surrounds the SAT verdict and witness on stdout.
+    val satStdout = "[10:00:00 INFO] some log line\nSAT\nsat\nb0\n#0\n0 0\n@0\n0 1\n.\n"
+    val counterexample = Ric3.summarize(satStdout, goal = "equivalence", alphabet = List("a", "b"), emptyBad = false)
+    assert(counterexample.contains("NOT PROVED"))
+    assert(counterexample.contains("witness: b"))
+
+    val unknown = Ric3.summarize("UNKNOWN\n", goal = "safety", alphabet = List("a", "b"), emptyBad = false)
+    assert(unknown.contains("UNKNOWN"))
   }
 
   test("ltl evaluator supports unary past and future operators") {

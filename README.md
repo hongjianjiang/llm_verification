@@ -26,6 +26,8 @@ every line with its own logging, which corrupts captured output.
 | `--kind2-safety` | Kind2 contract: the monitor never accepts |
 | `--kind2-subset SUPERSET INPUT` | Kind2 contract: `L(INPUT) ⊆ L(SUPERSET)` |
 | `--kind2-equivalent OTHER INPUT` | Kind2 contract: `L(INPUT) = L(OTHER)` |
+| `--btor2` | BTOR2 model of the Boolean-summary automaton (rIC3 backend) |
+| `--aiger` | binary AIGER model of the same automaton (ABC backend) |
 | `--brasp` | 2LTL back into a B-RASP program |
 | `--ltl` | compiled formula in `.ltl` text syntax |
 | `--json` | current stage as JSON |
@@ -62,6 +64,129 @@ node NAME(symbol: int; valid: bool; start: bool; last: bool)
 contract that pins `valid = true`, `start = (true -> false)`, `last = true`
 — i.e. one continuous word, one symbol per tick — and expose just
 `symbol: int` to Kind2.
+
+### rIC3 backend (`--btor2`, `--run-ric3`)
+
+[rIC3](https://github.com/gipsyh/rIC3) is a bit-level IC3/PDR hardware model
+checker; it takes AIGER/BTOR2 circuits, not Lustre, so it's wired up as a
+second backend alongside Kind2 rather than through the Lustre monitor above.
+
+`--btor2`/`--run-ric3` work standalone (just like `--boolean-automaton`) or
+alongside `--kind2-subset`/`--kind2-equivalent`, which still pick which
+automaton gets built (subset/equivalence counterexample search vs. the plain
+program); with none of those, the goal defaults to plain safety — the same
+"is any nonempty word accepted" question `--kind2-safety` asks Kind2.
+
+| Flag | Effect |
+| --- | --- |
+| `--btor2` | print the BTOR2 model instead of the plain automaton/Lustre |
+| `--run-ric3` | run rIC3 on it and print a summary (implies `--btor2`) |
+| `--ric3-bin PATH` | rIC3 executable (default `../rIC3/target/release/ric3`, sibling to this repo) |
+| `--ric3-mode ic3\|portfolio` | `ric3 check` subcommand — single-thread IC3 (default) or 16-thread portfolio |
+| `--ric3-raw` | print rIC3's raw stdout (verdict + BTOR2 witness) instead of the summary |
+
+`--ric3-mode` defaults to `ic3`, not rIC3's own default of `portfolio`:
+portfolio mode forks 16 worker processes, which hangs under some sandboxed
+dev environments (this one included) — pass `--ric3-mode portfolio`
+explicitly once you've confirmed `fork()` works fine in yours, e.g. for
+larger models where the single-threaded engine is too slow.
+
+The BTOR2 model encodes the automaton directly (one Boolean state register
+per summary cell, `init`/`next` per Kind2's `start`/`pre`, `bad` = the
+"nonempty prefix accepted" condition) — there's no `valid`/`start`/`last`
+input because BTOR2's `init`/`next` already mean "reset once at step 0,
+consume one symbol every step". The empty-word case doesn't get a second
+`bad` line: unlike Kind2 (which still asks the solver to reconfirm it), it's
+already a compile-time constant, so `--run-ric3`'s summary reports it
+directly without invoking rIC3 for it.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-ric3
+java -jar $JAR --run-ric3 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
+java -jar $JAR --run-ric3 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
+java -jar $JAR examples/brasp/last_a.brasp --btor2 > model.btor2
+/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
+```
+
+### ABC backend (`--aiger`, `--run-abc`)
+
+[ABC](https://github.com/berkeley-abc/abc)'s `pdr` (Property Directed
+Reachability, i.e. IC3) is a third backend for the same automaton, alongside
+Kind2 and rIC3 — same `--aiger`/`--run-abc` vs. `--kind2-*` split as rIC3's
+`--btor2`/`--run-ric3` above (goal flags pick *what*, these pick *which
+backend*).
+
+| Flag | Effect |
+| --- | --- |
+| `--aiger` | print the binary AIGER model instead of the plain automaton |
+| `--run-abc` | run ABC's `pdr` on it and print a summary (implies `--aiger`) |
+| `--abc-bin PATH` | ABC executable (default `../abc/abc`, sibling to this repo) |
+| `--abc-raw` | print ABC's raw stdout instead of the summary |
+
+The AIGER model reuses the exact same encoding `Btor2` does (one Boolean
+latch per summary cell, `bad` = "nonempty prefix accepted"), but every latch
+is canonicalized to physically reset to 0 — the standard XOR-with-init
+trick — because this build's binary AIGER reader only supports that
+(pre-1.9, no explicit-reset-field) latch format. ABC's `&read` (its other,
+ASCII-capable AIGER reader) was tried first and rejected: it silently
+treats every latch as uninitialized regardless of what the file declares,
+giving wrong verdicts rather than an error, so `Abc.run` always goes through
+the classic `read_aiger` + `pdr` pipeline instead.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-abc
+java -jar $JAR --run-abc --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
+java -jar $JAR examples/brasp/last_a.brasp --aiger > model.aig
+/Users/alexander/work/abc/abc -c "read_aiger model.aig; pdr; print_status"
+```
+
+## Converting LTLf benchmarks (`Ltlf`, `LtlfBatch`)
+
+`src/main/scala/ltlf/Ltlf.scala` compiles standard LTLf text (the syntax
+used across [SynthesisLab/LTLf_Learning_Benchmarks](https://github.com/SynthesisLab/LTLf_Learning_Benchmarks)
+and produced by Spot's `spot.from_ltlf`: `G`/`F`/`U`/`R`/`W`, `X[!]` (strong
+next) vs. bare `X` (weak next — these are genuinely different operators in
+this benchmark suite's own generator scripts, not just alternative syntax
+for the same thing), `!`, `&&`/`&`, `||`/`|`, `->`, `<->`, parentheses, bare
+identifiers, `true`/`false`) into this project's strict-past 2LTL, from
+which the existing `LtlToBrasp` produces a `.brasp` program as usual.
+
+**This is deliberately the reversed language, not the original one** — see
+`Ltl.mirrorToPast`'s doc-comment. A true same-word translation would need
+automaton synthesis (Krohn-Rhodes-style aperiodic decomposition); mirroring
+the direct, mechanical future-strict translation is the tractable
+alternative, reusing only already-tested code. Any reference traces need
+reversing before comparing them against the emitted program.
+
+LTLf traces are multi-proposition Boolean valuations per step (not this
+project's usual one-named-symbol-per-step model), so the alphabet is every
+valuation of the declared atomic propositions (`2^|AP|` symbols).
+
+```sh
+sbt "runMain brasp.LtlfBatch /path/to/LTLf_Learning_Benchmarks/Fixed_Formulas/formulas.txt out_dir"
+sbt "runMain brasp.LtlfBatch --json-dir /path/to/LTLf_Learning_Benchmarks/Generating_Instances/Subset out_dir"
+```
+
+The first form reads `formulas.txt`-style lines
+(`"formula";["ap0","ap1",...];"name";"source"`) — both `Fixed_Formulas/
+formulas.txt` itself and the same shape the `Generating_Formulas/gen_*.py`
+scripts write (e.g. `SingleCounter/4.txt`; note their AP list is Python's
+`str()` of a list, single-quoted, not JSON — `LtlfBatch.parseLine` handles
+both). The second (`--json-dir`) form instead reads every `*.json` instance
+file directly in a directory — the shape `Generating_Instances/gen_*.py`
+write, e.g. `Subset/trace_length=10....json` — pulling out just the
+`generating_formula`/`atomic_propositions` fields (the sampled traces
+themselves aren't needed here). Either way, one `.brasp` and one `.ltl` file
+is written per formula, named after the benchmark's own `name` field (or,
+for `--json-dir`, the input file's basename). `Hamming` has no formula at
+all (`generating_formula` is always `""` — pure trace-classification, not
+translatable) and is silently skipped.
+
+`ltl_examples/` in this repo holds one generated example per benchmark
+family (`Fixed_Formulas`, `SingleCounter`, `DoubleCounter`, `Nim`,
+`Random_Conjuncts_from_Basis`, `OrderedSequence`,
+`RandomBooleanCombinationsofFactors`, `Subset`, `Subword`) produced this
+way, each spot-checked against the assembled jar.
 
 ## `.brasp` syntax
 
@@ -128,4 +253,17 @@ Run a generated Kind2 model directly:
 
 ```sh
 /Users/alexander/work/kind2 -json safety.lus
+```
+
+Check the same properties with rIC3 instead:
+```sh
+java -jar target/scala-3.5.1/brasp-verification.jar --btor2 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp > subset.btor2
+java -jar target/scala-3.5.1/brasp-verification.jar --run-ric3 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
+java -jar target/scala-3.5.1/brasp-verification.jar --run-ric3 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
+```
+
+Run a generated BTOR2 model directly:
+
+```sh
+/Users/alexander/work/rIC3/target/release/ric3 check safety.btor2 --cex ic3
 ```

@@ -58,6 +58,7 @@ object Ltl:
   def mirror(formula: Formula): Formula = formula match
     case Constant(_) | Reference(_, _) => formula
     case Atom(AtomKind.BosAtom, variable, symbol) => Atom(AtomKind.EosAtom, variable, symbol)
+    case Atom(AtomKind.EosAtom, variable, symbol) => Atom(AtomKind.BosAtom, variable, symbol)
     case a: Atom                                   => a
     case Negation(operand)     => Negation(mirror(operand))
     case Conjunction(operands) => Conjunction(operands.map(mirror))
@@ -80,6 +81,27 @@ object Ltl:
       evaluationPoint = "i = 0 on reverse(w); symbols occupy 0..|w|-1 and EOS is |w|",
       acceptedLanguage = Some("{ reverse(w) : w is accepted by the past formula }"),
       alphabet = past.alphabet,
+    )
+
+  /** The other direction of `mirrorDag`: `mirror` is its own inverse at the
+    * per-`Formula` level, so this is `mirrorDag` with the tag/evaluation-point
+    * bookkeeping flipped. `mirrorDag(mirrorToPast(future)) == future`
+    * (structurally) and vice versa.
+    *
+    * Note this relates `future`'s language to its *reversal*, not to
+    * itself: `w |= mirrorToPast(future)` iff `reverse(w) |= future`. It does
+    * not answer "what past formula accepts the same words as `future`,
+    * unreversed" — no such formula is obtainable by mirroring alone.
+    */
+  def mirrorToPast(future: FormulaDag): FormulaDag =
+    if future.logic != Logic.FutureStrict then throw LtlError("mirror_to_past expects a strict-future 2LTL DAG")
+    FormulaDag(
+      logic = Logic.PastStrict,
+      definitions = VectorMap.from(future.definitions.view.mapValues(mirror)),
+      output = mirror(future.output),
+      evaluationPoint = "i = |w| on reverse(w); symbols occupy 1..|w| and BOS is 0",
+      acceptedLanguage = Some("{ reverse(w) : w is accepted by the future formula }"),
+      alphabet = future.alphabet,
     )
 
   def render(formula: Formula): String = formula match
