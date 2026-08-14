@@ -86,10 +86,27 @@ object Aiger:
     if automaton.source.alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
     val b = Builder()
     val states = automaton.source.states
-    val abstractions = automaton.abstractions
     val stateIndex = states.zipWithIndex.toMap
-    val abstractionIndex = abstractions.zipWithIndex.toMap
-    val gotoIndex = automaton.gotoSupport.zipWithIndex.toMap
+    // `Vector` at both levels, not `List`: both `mux`'s `select` and
+    // `transitionFormula` index into an abstraction/`bits`, and `mux` also
+    // indexes into the abstraction *list itself* by position (up to
+    // `2^n - 1`) — either as a `List`, that's an O(i) scan per lookup, the
+    // same trap `supportIndex` (see `BooleanAutomaton.scala`) exists to
+    // avoid one level up. Cached per state: `mux` (called twice, via the
+    // `oldDiagonal`/`curDiagonal` `diagonalOf` passes) and the latch/
+    // `trueNext` loops below each ask for the same state's abstractions
+    // again, and rebuilding a `2^n`-entry vector from scratch every time is
+    // wasted work for states with a sizeable local support.
+    val abstractionsCache = mutable.Map.empty[String, Vector[Vector[Boolean]]]
+    def abstractionsOf(state: String): Vector[Vector[Boolean]] =
+      abstractionsCache.getOrElseUpdate(
+        state, {
+          val n = automaton.support(state).length
+          if n == 0 then Vector(Vector.empty) else (0 until (1 << n)).map(i => (n - 1 to 0 by -1).map(bit => ((i >> bit) & 1) == 1).toVector).toVector
+        },
+      )
+    def abstractionIndexOf(state: String, abstraction: Vector[Boolean]): Int =
+      abstraction.foldLeft(0)((acc, bit) => (acc << 1) | (if bit then 1 else 0))
     val alphabet = automaton.source.alphabet
     val alphabetSize = alphabet.length
     val ordered = states.sortBy(state => (automaton.source.rank(state), state))
@@ -105,20 +122,21 @@ object Aiger:
     // Every latch must exist before any AND gate does (AIGER numbers
     // variables positionally by role), so allocate all of them up front —
     // and canonicalize every one to physically reset to 0 (see class doc).
-    val physicalLatch = mutable.Map.empty[(String, List[Boolean]), Int] // -> latch var
-    val resetsHigh = mutable.Map.empty[(String, List[Boolean]), Boolean]
+    val physicalLatch = mutable.Map.empty[(String, Vector[Boolean]), Int] // -> latch var
+    val resetsHigh = mutable.Map.empty[(String, Vector[Boolean]), Boolean]
     for
       state <- states
-      abstraction <- abstractions
+      abstraction <- abstractionsOf(state)
     do
       physicalLatch((state, abstraction)) = b.freshVar()
-      resetsHigh((state, abstraction)) = automaton.initial.table(stateIndex(state))(abstractionIndex(abstraction))
+      resetsHigh((state, abstraction)) = automaton.initial.table(state)(abstractionIndexOf(state, abstraction))
 
-    def trueOldLit(state: String, abstraction: List[Boolean]): Int =
+    def trueOldLit(state: String, abstraction: Vector[Boolean]): Int =
       val key = (state, abstraction)
       b.flip(b.lit(physicalLatch(key)), resetsHigh(key))
 
-    def mux(state: String, bits: List[Int], summaryOf: (String, List[Boolean]) => Int): Int =
+    def mux(state: String, bits: Vector[Int], summaryOf: (String, Vector[Boolean]) => Int): Int =
+      val abstractions = abstractionsOf(state)
       def select(index: Int, depth: Int): Int =
         if depth == bits.length then summaryOf(state, abstractions(index))
         else
@@ -127,26 +145,33 @@ object Aiger:
           b.ite(bits(depth), trueBranch, falseBranch)
       select(0, 0)
 
-    def diagonalOf(summaryOf: (String, List[Boolean]) => Int): Map[String, Int] =
+    def diagonalOf(summaryOf: (String, Vector[Boolean]) => Int): Map[String, Int] =
       var known = Map.empty[String, Int]
       for state <- ordered do
-        val bits = automaton.gotoSupport.map(goto => known.getOrElse(goto, b.False))
+        val bits = automaton.support(state).map(goto => known.getOrElse(goto, b.False)).toVector
         known = known.updated(state, mux(state, bits, summaryOf))
       known
 
     val oldDiagonal = diagonalOf((state, abstraction) => trueOldLit(state, abstraction))
 
-    def transitionFormula(formula: PositiveFormula, abstraction: List[Boolean]): Int = formula match
+    // `ownerAbstraction` is indexed by `automaton.support(owner)`; a
+    // `leave`/`goto` atom's target is always in `owner`'s support by
+    // construction (see `BooleanAutomaton.supportOf`), so the projections
+    // below always find a valid index.
+    def transitionFormula(owner: String, ownerAbstraction: Vector[Boolean], formula: PositiveFormula): Int = formula match
       case PositiveFormula.PositiveConstant(value) => if value then b.True else b.False
       case PositiveFormula.PositiveAnd(operands) =>
-        operands.map(transitionFormula(_, abstraction)).reduceLeftOption(b.and).getOrElse(b.True)
+        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption(b.and).getOrElse(b.True)
       case PositiveFormula.PositiveOr(operands) =>
-        operands.map(transitionFormula(_, abstraction)).reduceLeftOption(b.or).getOrElse(b.False)
+        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption(b.or).getOrElse(b.False)
       case PositiveFormula.TransitionAtom(state, action) =>
+        val ownerIndex = automaton.supportIndex(owner)
         action match
           case Action.Carry => oldDiagonal(state)
-          case Action.Leave => trueOldLit(state, abstraction)
-          case Action.Goto  => if abstraction(gotoIndex(state)) then b.True else b.False
+          case Action.Leave =>
+            val bits = automaton.support(state).map(g => ownerAbstraction(ownerIndex(g))).toVector
+            trueOldLit(state, bits)
+          case Action.Goto => if ownerAbstraction(ownerIndex(state)) then b.True else b.False
 
     /** Bitwise equality of the `symbol` input against the constant `index`,
       * i.e. the AIGER bit-blast of `Btor2`'s `eq $symbolInput ${constIndex(index)}`.
@@ -157,17 +182,17 @@ object Aiger:
         b.and(acc, b.xnor(inputLits(bitPos), bit))
       }
 
-    def symbolCase(state: String, abstraction: List[Boolean]): Int =
+    def symbolCase(state: String, abstraction: Vector[Boolean]): Int =
       val base = trueOldLit(state, abstraction)
       alphabet.zipWithIndex.foldRight(base) { case ((symbol, index), acc) =>
-        val transition = transitionFormula(automaton.source.transitions((state, symbol)), abstraction)
+        val transition = transitionFormula(state, abstraction, automaton.source.transitions((state, symbol)))
         b.ite(symbolEquals(index), transition, acc)
       }
 
-    val trueNext = mutable.Map.empty[(String, List[Boolean]), Int]
+    val trueNext = mutable.Map.empty[(String, Vector[Boolean]), Int]
     for
       state <- states
-      abstraction <- abstractions
+      abstraction <- abstractionsOf(state)
     do trueNext((state, abstraction)) = symbolCase(state, abstraction)
 
     val curDiagonal = diagonalOf((state, abstraction) => trueNext((state, abstraction)))
@@ -178,7 +203,7 @@ object Aiger:
     // reset-to-0 latch actually stores.
     val latches = for
       state <- states
-      abstraction <- abstractions
+      abstraction <- abstractionsOf(state)
     yield
       val key = (state, abstraction)
       (physicalLatch(key), b.flip(trueNext(key), resetsHigh(key)))

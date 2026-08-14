@@ -26,19 +26,39 @@ object Lustre:
     if automaton.source.alphabet.isEmpty then throw LustreError("the Lustre backend requires a non-empty alphabet")
     val node = identifier(nodeName)
     val states = automaton.source.states
-    val abstractions = automaton.abstractions
     val stateIndex = states.zipWithIndex.toMap
-    val abstractionIndex = abstractions.zipWithIndex.toMap
-    val gotoIndex = automaton.gotoSupport.zipWithIndex.toMap
+    // `Vector` at both levels, not `List`: both `mux`'s `select` and
+    // `transitionFormula` index into an abstraction/`bits`, and `mux` also
+    // indexes into the abstraction *list itself* by position (up to
+    // `2^n - 1`) — either as a `List`, that's an O(i) scan per lookup, the
+    // same trap `supportIndex` (see `BooleanAutomaton.scala`) exists to
+    // avoid one level up. Cached per state: `mux` (called twice, via the
+    // `old`/`cur` `diagonalEquations` passes) and the declaration/equation
+    // loops below each ask for the same state's abstractions again, and
+    // rebuilding a `2^n`-entry vector from scratch every time is wasted
+    // work for states with a sizeable local support.
+    val abstractionsCache = scala.collection.mutable.HashMap.empty[String, Vector[Vector[Boolean]]]
+    def abstractionsOf(state: String): Vector[Vector[Boolean]] =
+      abstractionsCache.getOrElseUpdate(
+        state, {
+          val n = automaton.support(state).length
+          if n == 0 then Vector(Vector.empty) else (0 until (1 << n)).map(i => (n - 1 to 0 by -1).map(bit => ((i >> bit) & 1) == 1).toVector).toVector
+        },
+      )
+    def abstractionIndexOf(state: String, abstraction: Vector[Boolean]): Int =
+      abstraction.foldLeft(0)((acc, bit) => (acc << 1) | (if bit then 1 else 0))
     val alphabetSize = automaton.source.alphabet.length
 
-    def summaryName(prefix: String, state: String, abstraction: List[Boolean]): String =
-      s"${prefix}_s_${stateIndex(state)}_${abstractionIndex(abstraction)}"
+    def summaryName(prefix: String, state: String, abstraction: Vector[Boolean]): String =
+      s"${prefix}_s_${stateIndex(state)}_${abstractionIndexOf(state, abstraction)}"
     def diagonalName(prefix: String, state: String): String =
       s"${prefix}_v_${stateIndex(state)}"
 
-    /** Select the summary column indexed by the Boolean expressions `bits`. */
-    def mux(state: String, bits: List[String], prefix: String): String =
+    /** Select the summary column indexed by the Boolean expressions `bits`
+      * (`state`'s own local support, in order).
+      */
+    def mux(state: String, bits: Vector[String], prefix: String): String =
+      val abstractions = abstractionsOf(state)
       def select(index: Int, depth: Int): String =
         if depth == bits.length then summaryName(prefix, state, abstractions(index))
         else
@@ -53,48 +73,56 @@ object Lustre:
       val equations = scala.collection.mutable.ArrayBuffer.empty[String]
       var known = Set.empty[String]
       for state <- ordered do
-        val bits = automaton.gotoSupport.map(goto => if known.contains(goto) then diagonalName(prefix, goto) else "false")
+        val bits = automaton.support(state).map(goto => if known.contains(goto) then diagonalName(prefix, goto) else "false").toVector
         equations += s"  ${diagonalName(prefix, state)} = ${mux(state, bits, prefix)};"
         known += state
       equations.toList
 
-    def transitionFormula(formula: PositiveFormula, abstraction: List[Boolean]): String = formula match
+    // `ownerAbstraction` is indexed by `automaton.support(owner)`; a
+    // `leave`/`goto` atom's target is always in `owner`'s support by
+    // construction (see `BooleanAutomaton.supportOf`), so the
+    // `automaton.supportIndex(owner)` lookups below always find a valid
+    // index.
+    def transitionFormula(owner: String, ownerAbstraction: Vector[Boolean], formula: PositiveFormula): String = formula match
       case PositiveFormula.PositiveConstant(value) => if value then "true" else "false"
       case PositiveFormula.PositiveAnd(operands) =>
-        "(" + operands.map(transitionFormula(_, abstraction)).mkString(" and ") + ")"
+        "(" + operands.map(transitionFormula(owner, ownerAbstraction, _)).mkString(" and ") + ")"
       case PositiveFormula.PositiveOr(operands) =>
-        "(" + operands.map(transitionFormula(_, abstraction)).mkString(" or ") + ")"
+        "(" + operands.map(transitionFormula(owner, ownerAbstraction, _)).mkString(" or ") + ")"
       case PositiveFormula.TransitionAtom(state, action) =>
+        val ownerIndex = automaton.supportIndex(owner)
         action match
           case Action.Carry => diagonalName("old", state)
-          case Action.Leave => summaryName("old", state, abstraction)
-          case Action.Goto  => if abstraction(gotoIndex(state)) then "true" else "false"
+          case Action.Leave =>
+            val bits = automaton.support(state).map(g => ownerAbstraction(ownerIndex(g))).toVector
+            summaryName("old", state, bits)
+          case Action.Goto => if ownerAbstraction(ownerIndex(state)) then "true" else "false"
 
-    def symbolCase(state: String, abstraction: List[Boolean]): String =
+    def symbolCase(state: String, abstraction: Vector[Boolean]): String =
       automaton.source.alphabet.zipWithIndex.foldRight(summaryName("old", state, abstraction)) {
         case ((symbol, index), expression) =>
           val transition = automaton.source.transitions((state, symbol))
-          s"(if symbol = $index then ${transitionFormula(transition, abstraction)} else $expression)"
+          s"(if symbol = $index then ${transitionFormula(state, abstraction, transition)} else $expression)"
       }
 
     val declarations = scala.collection.mutable.ArrayBuffer.empty[String]
     val equations = scala.collection.mutable.ArrayBuffer.empty[String]
     for
       state <- states
-      abstraction <- abstractions
+      abstraction <- abstractionsOf(state)
     do
       val old = summaryName("old", state, abstraction)
       val cur = summaryName("cur", state, abstraction)
       declarations += s"  $old: bool;"
       declarations += s"  $cur: bool;"
-      val initialLiteral = if automaton.initial.table(stateIndex(state))(abstractionIndex(abstraction)) then "true" else "false"
+      val initialLiteral = if automaton.initial.table(state)(abstractionIndexOf(state, abstraction)) then "true" else "false"
       equations += s"  $old = $initialLiteral -> (if start then $initialLiteral else pre($cur));"
     declarations ++= states.map(state => s"  ${diagonalName("old", state)}: bool;")
     declarations ++= states.map(state => s"  ${diagonalName("cur", state)}: bool;")
     equations ++= diagonalEquations("old")
     for
       state <- states
-      abstraction <- abstractions
+      abstraction <- abstractionsOf(state)
     do
       val old = summaryName("old", state, abstraction)
       equations += s"  ${summaryName("cur", state, abstraction)} = if not valid then $old else ${symbolCase(state, abstraction)};"

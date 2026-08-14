@@ -1,7 +1,5 @@
 package brasp
 
-import scala.collection.immutable.VectorMap
-
 /** Forward pebble very weak alternating automata for future 2LTL.
   *
   * The paper defines a right-to-left PVWAA for past 2LTL. This module is its
@@ -36,7 +34,7 @@ enum PositiveFormula:
 final case class ForwardPVWAA(
     alphabet: List[String],
     states: List[String],
-    transitions: VectorMap[(String, String), PositiveFormula],
+    transitions: Map[(String, String), PositiveFormula],
     initialState: String,
     finalStates: Set[String],
     rank: Map[String, Int],
@@ -46,6 +44,52 @@ object Pvwaa:
   import Formula.*
   import PositiveFormula.*
   import JsonValue.*
+
+  /** Does `top(formula, dual, symbol, current)` actually depend on `symbol`?
+    * Only a direct `Atom(SymbolAtom, ...)` leaf does — `Reference` becomes a
+    * `Goto`/`Carry` atom regardless of `symbol`, and `Until` delegates to
+    * `predicate`, which never inspects `symbol` at all. Named definitions
+    * built purely from references to other names (e.g. "this bit is set" as
+    * an OR of every matching alphabet symbol's own named atom) are the
+    * common case for large alphabets, and are therefore fully
+    * symbol-independent: `top` would otherwise rebuild an identical,
+    * possibly large `PositiveFormula` tree once per alphabet symbol for
+    * nothing. Anything not recognized here conservatively answers `true`
+    * (forces per-symbol evaluation, which is always correct, just not
+    * optimized) rather than risk caching a formula that does vary.
+    */
+  private def usesSymbol(formula: Formula): Boolean = formula match
+    case Constant(_) | Reference(_, _)                  => false
+    case Atom(AtomKind.SymbolAtom, Position.I, _)         => true
+    case _: Atom                                          => false
+    case Negation(operand)                                => usesSymbol(operand)
+    case Conjunction(operands)                            => operands.exists(usesSymbol)
+    case Disjunction(operands)                            => operands.exists(usesSymbol)
+    case _: Until                                          => false
+    case _                                                 => true
+
+  /** Rewrite `Next`/`Eventually`/`Always` into the `Until`/`Negation` terms
+    * `top`, `predicate`, `finalOf`, and `symbolsOf` already handle, via the
+    * standard equivalences `X φ = false U φ`, `F φ = true U φ`, and
+    * `G φ = ¬F(¬φ)` — the future mirror of `LtlToBrasp.normalize`'s
+    * `Y φ = false S φ`, `O φ = true S φ` for the past side (`Ltl.mirror`
+    * pairs `Previous↔Next`, `Once↔Eventually`, `Historically↔Always`,
+    * `Since↔Until` the same way). Without this, any strict-future DAG
+    * containing a raw `Next`/`Eventually`/`Always` (e.g. from `LtlText`'s
+    * `X(...)`/`F(...)`/`G(...)` parser, or `Ltlf`-compiled formulas, which
+    * emit `Next`/`Eventually` directly) fails PVWAA translation even though
+    * it's semantically just `Until` in disguise.
+    */
+  private def desugarFuture(formula: Formula): Formula = formula match
+    case Constant(_) | Atom(_, _, _) | Reference(_, _) => formula
+    case Negation(operand)                              => Negation(desugarFuture(operand))
+    case Conjunction(operands)                           => Conjunction(operands.map(desugarFuture))
+    case Disjunction(operands)                            => Disjunction(operands.map(desugarFuture))
+    case Until(anchor, witness, left, right)               => Until(anchor, witness, desugarFuture(left), desugarFuture(right))
+    case Next(anchor, witness, operand)                     => Until(anchor, witness, Constant(false), desugarFuture(operand))
+    case Eventually(anchor, witness, operand)                => Until(anchor, witness, Constant(true), desugarFuture(operand))
+    case Always(anchor, witness, operand)                     => Negation(Until(anchor, witness, Constant(true), Negation(desugarFuture(operand))))
+    case other                                                 => other
 
   private def symbolsOf(formula: Formula): Set[String] = formula match
     case Atom(AtomKind.SymbolAtom, _, Some(symbol)) => Set(symbol)
@@ -155,7 +199,7 @@ object Pvwaa:
     if dag.logic != Logic.FutureStrict then throw PVWAAError("from_future_2ltl expects a strict-future 2LTL DAG")
 
     val definitions = scala.collection.mutable.LinkedHashMap.empty[String, Formula]
-    definitions ++= dag.definitions.toVector
+    definitions ++= dag.definitions.toVector.map { case (name, formula) => name -> desugarFuture(formula) }
 
     val initialName: String = dag.output match
       case Reference(name, Position.I) if definitions.contains(name) => name
@@ -163,7 +207,7 @@ object Pvwaa:
       case _ =>
         var candidate = "__output__"
         while definitions.contains(candidate) do candidate = "_" + candidate
-        definitions(candidate) = dag.output
+        definitions(candidate) = desugarFuture(dag.output)
         candidate
 
     val names: List[String] = definitions.keys.toList
@@ -237,19 +281,34 @@ object Pvwaa:
     val finalStates: Set[String] =
       (for name <- names; dual <- duals if finalOf(definitions(name), dual) yield stateName(name, dual)).toSet
 
-    val transitionEntries: Vector[((String, String), PositiveFormula)] =
-      (for
-        name <- names
-        dual <- duals
-        current = stateName(name, dual)
-        formula = definitions(name)
-        symbol <- alphabet
-      yield (current, symbol) -> top(formula, dual, symbol, current)).toVector
+    // Built directly into a mutable hash map (sized up front) rather than
+    // through a `for`-comprehension into a `List`/`Vector` and then an
+    // immutable map: for a large alphabet this table has `states x
+    // alphabet` entries (tens of millions for a several-thousand-symbol
+    // alphabet), and repeatedly growing/rehashing a persistent immutable
+    // map one entry at a time dominates runtime at that scale.
+    val transitionsBuilder = Map.newBuilder[(String, String), PositiveFormula]
+    transitionsBuilder.sizeHint(names.length * duals.length * alphabet.length)
+    for
+      name <- names
+      dual <- duals
+    do
+      val current = stateName(name, dual)
+      val formula = definitions(name)
+      // If `top` can't actually vary with `symbol` for this definition,
+      // build it once and reuse across the whole alphabet instead of
+      // rebuilding an identical tree per symbol (see `usesSymbol`).
+      if usesSymbol(formula) then
+        for symbol <- alphabet do transitionsBuilder += (current, symbol) -> top(formula, dual, symbol, current)
+      else
+        for first <- alphabet.headOption do
+          val shared = top(formula, dual, first, current)
+          for symbol <- alphabet do transitionsBuilder += (current, symbol) -> shared
 
     ForwardPVWAA(
       alphabet = alphabet,
       states = states,
-      transitions = VectorMap.from(transitionEntries),
+      transitions = transitionsBuilder.result(),
       initialState = stateName(initialName, false),
       finalStates = finalStates,
       rank = ranks,

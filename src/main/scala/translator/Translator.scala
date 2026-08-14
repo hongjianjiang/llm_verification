@@ -234,13 +234,26 @@ object Translator:
 
   /** Split `--word` text into symbols: whitespace-separated if it contains
     * whitespace (for multi-character symbols), otherwise one symbol per
-    * character (for the common single-character-alphabet case).
+    * character (for the common single-character-alphabet case) — unless
+    * the whole trimmed text is itself exactly one of `alphabet`'s symbols,
+    * in which case it's a length-1 word of that symbol. Without that
+    * check, a length-1 word could never be written for a multi-character
+    * alphabet: e.g. alphabet `{111, 000}` and `--word 111` would
+    * char-split into `1`, `1`, `1` — none of them valid symbols — since
+    * there's no whitespace to signal "don't split per character", and
+    * trimming means padding with a stray space doesn't help either.
     */
-  private def splitWord(text: String): IndexedSeq[String] =
+  private def splitWord(text: String, alphabet: List[String]): IndexedSeq[String] =
     val trimmed = text.trim
     if trimmed.isEmpty then IndexedSeq.empty
+    else if alphabet.contains(trimmed) then IndexedSeq(trimmed)
     else if trimmed.exists(_.isWhitespace) then trimmed.split("\\s+").toIndexedSeq
     else trimmed.map(_.toString).toIndexedSeq
+
+  private def alphabetOf(compiled: CompileResult): List[String] = compiled match
+    case CompileResult.BooleanResult(automaton) => automaton.source.alphabet
+    case CompileResult.PvwaaResult(automaton)   => automaton.alphabet
+    case CompileResult.Dag(dag)                 => dag.alphabet.getOrElse(Nil)
 
   def run(args: Array[String]): Int =
     val parsed =
@@ -311,7 +324,7 @@ object Translator:
 
     if parsed.word.isDefined then
       try
-        val word = splitWord(parsed.word.get)
+        val word = splitWord(parsed.word.get, alphabetOf(compiled))
         val accepted = compiled match
           case CompileResult.BooleanResult(automaton) => BooleanAutomaton.accepts(automaton, word)
           // the PVWAA accepts reverse(w); --word always answers about w itself.

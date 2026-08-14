@@ -6,21 +6,46 @@ package brasp
   * goto-support. This is the directional mirror of Section 9.2 of the paper.
   * For a forward PVWAA recognizing `reverse(L)`, the resulting automaton
   * reads a word in `L` from left to right.
+  *
+  * A state `q`'s summary function only actually varies with a goto-support
+  * bit `g` if `q` directly `goto`-references `g`, or `leave`-references
+  * (transitively, since `leave` re-reads the same abstraction) some other
+  * state whose summary varies with `g`; `carry` never contributes a
+  * dependency, since it only reads a plain diagonal scalar. In practice this
+  * per-state "local support" (`ReverseBooleanAutomaton.support`) is far
+  * smaller than the automaton-wide `gotoSupport`, so every table here is
+  * indexed per-state by that state's own local support rather than by one
+  * automaton-wide `2^|gotoSupport|` abstraction space — the latter is
+  * astronomical even for modest automata (Prop. 9.4) despite most of it
+  * being irrelevant to any single state.
   */
 
-/** A total truth table for `Q x B^G`, encoded in automaton order. */
-final case class BooleanSummary(table: Vector[Vector[Boolean]])
+/** Per-state Boolean summary: `table(state)` is a total truth table over
+  * `ReverseBooleanAutomaton.support(state)`, indexed by the binary encoding
+  * of a local abstraction (MSB-first, matching `cartesianBooleans`'s
+  * enumeration order — see `BooleanAutomaton.bitsToIndex`).
+  */
+final case class BooleanSummary(table: Map[String, Vector[Boolean]])
 
 /** A deterministic Boolean automaton that reads the original language.
   *
   * `source` reads the reversed language left-to-right. This automaton reads
   * the source word in the opposite direction, hence left-to-right on the
   * original word. It materializes one Boolean-summary state at a time.
+  *
+  * `gotoSupport` is the automaton-wide set of every state ever reached by a
+  * `goto` transition (rank order); `support(state)` is the subsequence of
+  * `gotoSupport` that `state`'s own summary function actually depends on.
+  * `supportIndex(state)` is `support(state).zipWithIndex.toMap`, precomputed
+  * once so every `goto`/`leave` bit lookup is an O(1) map read instead of an
+  * O(|support(state)|) `List.indexOf` scan repeated across `2^|support|`
+  * abstractions and every BFS step of `reachable`/`accepts`.
   */
 final case class ReverseBooleanAutomaton(
     source: ForwardPVWAA,
     gotoSupport: List[String],
-    abstractions: List[List[Boolean]],
+    support: Map[String, List[String]],
+    supportIndex: Map[String, Map[String, Int]],
     initial: BooleanSummary,
 )
 
@@ -44,9 +69,31 @@ object BooleanAutomaton:
   import JsonValue.*
   import scala.collection.immutable.VectorMap
 
-  private def cartesianBooleans(n: Int): List[List[Boolean]] =
-    if n == 0 then List(Nil)
-    else for first <- List(false, true); rest <- cartesianBooleans(n - 1) yield first :: rest
+  // `transition` calls `cartesianBooleans(support(state).length)` fresh for
+  // every state on every call — and `transition` itself runs once per
+  // step of `accepts`/`reachable`'s BFS (up to `maxStates x alphabet`
+  // times). Without caching, a state with a support of even ~20 turns
+  // into rebuilding a multi-hundred-thousand-element list from scratch on
+  // every single one of those calls; `n` is the only input, so the result
+  // is safe to memoize globally, once, across every automaton. Each
+  // abstraction is a `Vector`, not a `List`: `evaluate` (below) indexes
+  // into it once per `goto`/`leave` atom per abstraction, and `List(i)` is
+  // itself an O(i) scan — the exact same trap `supportIndex` exists to
+  // avoid one level up.
+  private val cartesianCache = scala.collection.mutable.HashMap.empty[Int, List[Vector[Boolean]]]
+
+  private def cartesianBooleans(n: Int): List[Vector[Boolean]] =
+    cartesianCache.getOrElseUpdate(
+      n,
+      if n == 0 then List(Vector.empty) else for first <- List(false, true); rest <- cartesianBooleans(n - 1) yield first +: rest,
+    )
+
+  /** Binary-encode a local abstraction into a table index, MSB-first — the
+    * same weighting `cartesianBooleans`'s enumeration order and every
+    * backend's `mux`/`ite` selector tree already assume.
+    */
+  private def bitsToIndex(bits: List[Boolean]): Int =
+    bits.foldLeft(0)((acc, bit) => (acc << 1) | (if bit then 1 else 0))
 
   private def gotoSupportOf(automaton: ForwardPVWAA): List[String] =
     var found = Set.empty[String]
@@ -59,14 +106,78 @@ object BooleanAutomaton:
     automaton.transitions.values.foreach(visit)
     found.toList.sortBy(state => (automaton.rank(state), state))
 
+  /** The `goto`/`leave` states each state's own transition formulas mention
+    * directly (union across every input symbol).
+    */
+  private def directTargets(automaton: ForwardPVWAA): Map[String, (Set[String], Set[String])] =
+    def atoms(formula: PositiveFormula, goto: scala.collection.mutable.Set[String], leave: scala.collection.mutable.Set[String]): Unit =
+      formula match
+        case PositiveFormula.TransitionAtom(state, Action.Goto)  => goto += state
+        case PositiveFormula.TransitionAtom(state, Action.Leave) => leave += state
+        case _: PositiveFormula.TransitionAtom                   => ()
+        case PositiveFormula.PositiveAnd(operands)                => operands.foreach(atoms(_, goto, leave))
+        case PositiveFormula.PositiveOr(operands)                 => operands.foreach(atoms(_, goto, leave))
+        case PositiveFormula.PositiveConstant(_)                  => ()
+    automaton.states.map { state =>
+      val goto = scala.collection.mutable.Set.empty[String]
+      val leave = scala.collection.mutable.Set.empty[String]
+      for symbol <- automaton.alphabet do atoms(automaton.transitions((state, symbol)), goto, leave)
+      state -> (goto.toSet, leave.toSet)
+    }.toMap
+
+  /** `support(state)`: the goto-support states whose bit actually affects
+    * `state`'s summary — direct `goto` targets, plus (transitively) the
+    * support of every `leave` target. Computed as a least fixpoint over the
+    * (possibly cyclic, e.g. self-loop `leave`) target graph, then ordered
+    * as a subsequence of `gotoSupport` so a `leave`-referenced state's
+    * (smaller) local abstraction can be recovered from its referrer's by
+    * simple index lookup — see `BooleanAutomaton.transition`.
+    */
+  private def supportOf(automaton: ForwardPVWAA, gotoSupport: List[String]): Map[String, List[String]] =
+    val targets = directTargets(automaton)
+    var supportSets = automaton.states.map(state => state -> targets(state)._1).toMap
+    var changed = true
+    while changed do
+      changed = false
+      for state <- automaton.states do
+        val leaveTargets = targets(state)._2
+        val merged = supportSets(state) ++ leaveTargets.flatMap(supportSets)
+        if merged.size != supportSets(state).size then
+          supportSets = supportSets.updated(state, merged)
+          changed = true
+    automaton.states.map(state => state -> gotoSupport.filter(supportSets(state))).toMap
+
+  /** Every state's local Boolean-summary table has `2^support(state).length`
+    * entries (`BooleanAutomaton.fromForwardPvwaa`'s `Vector.fill`,
+    * mirrored by every backend's own per-state table/mux construction).
+    * Beyond a couple dozen dependencies that's already tens of millions of
+    * entries — impractical to materialize — and beyond 31 it silently
+    * overflows `Int`'s `1 << n` (wrapping, or going negative), corrupting
+    * the table size instead of just being slow. Reject early with a clear
+    * message rather than let either failure mode surface as a confusing
+    * crash or hang deep in `diagonal`/`transition`.
+    */
+  private val maxLocalSupport = 24
+
+  private def checkSupportSize(support: Map[String, List[String]]): Unit =
+    for (state, deps) <- support if deps.length > maxLocalSupport do
+      throw PVWAAError(
+        s"state '$state' depends on ${deps.length} other goto-support states, exceeding this backend's per-state limit of $maxLocalSupport " +
+          s"(its Boolean-summary table would need 2^${deps.length} entries) — the automaton's goto/leave dependency structure is too tangled for this encoding"
+      )
+
   /** Construct the initial Boolean summary for the reversed automaton. */
   def fromForwardPvwaa(automaton: ForwardPVWAA): ReverseBooleanAutomaton =
     val gotoSupport = gotoSupportOf(automaton)
-    val abstractions = cartesianBooleans(gotoSupport.length)
+    val support = supportOf(automaton, gotoSupport)
+    checkSupportSize(support)
+    val supportIndex = support.view.mapValues(_.zipWithIndex.toMap).toMap
     val initial = BooleanSummary(
-      automaton.states.map(state => abstractions.map(_ => automaton.finalStates.contains(state)).toVector).toVector
+      automaton.states.map { state =>
+        state -> Vector.fill(1 << support(state).length)(automaton.finalStates.contains(state))
+      }.toMap
     )
-    ReverseBooleanAutomaton(automaton, gotoSupport, abstractions, initial)
+    ReverseBooleanAutomaton(automaton, gotoSupport, support, supportIndex, initial)
 
   /** Solve `V(q) = S(q, V|G)` bottom-up along the very-weak order. */
   def diagonal(automaton: ReverseBooleanAutomaton, summary: BooleanSummary): Map[String, Boolean] =
@@ -75,10 +186,8 @@ object BooleanAutomaton:
     for state <- ordered do
       // By very weakness, this row can inspect only strictly lower-ranked
       // goto states. Values for the remaining support are don't-cares.
-      val abstraction = automaton.gotoSupport.map(goto => result.getOrElse(goto, false))
-      val stateIndex = automaton.source.states.indexOf(state)
-      val abstractionIndex = automaton.abstractions.indexOf(abstraction)
-      result = result.updated(state, summary.table(stateIndex)(abstractionIndex))
+      val bits = automaton.support(state).map(goto => result.getOrElse(goto, false))
+      result = result.updated(state, summary.table(state)(bitsToIndex(bits)))
     result
 
   /** Consume one original-language symbol and return the next summary. */
@@ -87,21 +196,28 @@ object BooleanAutomaton:
       throw PVWAAError(s"symbol outside automaton alphabet: '$symbol'")
     val priorDiagonal = diagonal(automaton, summary)
 
-    def evaluate(formula: PositiveFormula, abstraction: List[Boolean]): Boolean = formula match
+    // `ownerAbstraction` is indexed by `automaton.support(owner)` — the
+    // formula being evaluated always belongs to `owner`. A `leave`/`goto`
+    // atom's target is always in `owner`'s support by construction of
+    // `supportOf`, so the `automaton.supportIndex(owner)` lookups below
+    // never miss.
+    def evaluate(owner: String, ownerIndex: Map[String, Int], ownerAbstraction: Vector[Boolean], formula: PositiveFormula): Boolean = formula match
       case PositiveFormula.PositiveConstant(value) => value
-      case PositiveFormula.PositiveAnd(operands)    => operands.forall(o => evaluate(o, abstraction))
-      case PositiveFormula.PositiveOr(operands)     => operands.exists(o => evaluate(o, abstraction))
+      case PositiveFormula.PositiveAnd(operands)    => operands.forall(o => evaluate(owner, ownerIndex, ownerAbstraction, o))
+      case PositiveFormula.PositiveOr(operands)     => operands.exists(o => evaluate(owner, ownerIndex, ownerAbstraction, o))
       case PositiveFormula.TransitionAtom(state, action) =>
         action match
           case Action.Carry => priorDiagonal(state)
           case Action.Leave =>
-            summary.table(automaton.source.states.indexOf(state))(automaton.abstractions.indexOf(abstraction))
-          case Action.Goto => abstraction(automaton.gotoSupport.indexOf(state))
+            val bits = automaton.support(state).map(g => ownerAbstraction(ownerIndex(g)))
+            summary.table(state)(bitsToIndex(bits))
+          case Action.Goto => ownerAbstraction(ownerIndex(state))
 
     val table = automaton.source.states.map { state =>
       val formula = automaton.source.transitions((state, symbol))
-      automaton.abstractions.map(abstraction => evaluate(formula, abstraction)).toVector
-    }.toVector
+      val index = automaton.supportIndex(state)
+      state -> cartesianBooleans(automaton.support(state).length).map(abstraction => evaluate(state, index, abstraction, formula)).toVector
+    }.toMap
     BooleanSummary(table)
 
   /** Run the Boolean automaton left-to-right on the original word. */
@@ -109,15 +225,24 @@ object BooleanAutomaton:
     val finalSummary = word.foldLeft(automaton.initial)((summary, symbol) => transition(automaton, summary, symbol))
     diagonal(automaton, finalSummary)(automaton.source.initialState)
 
+  /** Total number of independent Boolean cells across every state's local
+    * summary table — the size of the (never-materialized) full
+    * Boolean-summary state space is `2` to this power.
+    */
+  private def totalCells(automaton: ReverseBooleanAutomaton): BigInt =
+    automaton.source.states.map(state => BigInt(2).pow(automaton.support(state).length)).sum
+
   private def maximumStateCount(automaton: ReverseBooleanAutomaton): BigInt =
-    BigInt(2).pow(automaton.source.states.length * automaton.abstractions.length)
+    val cells = totalCells(automaton).min(BigInt(Int.MaxValue))
+    BigInt(2).pow(cells.toInt)
 
   def render(automaton: ReverseBooleanAutomaton): String =
     List(
       "Reverse Boolean automaton (reads the original language left-to-right)",
       s"PVWAA states: ${automaton.source.states.length}",
       s"goto support: {${automaton.gotoSupport.mkString(", ")}}",
-      s"Boolean abstractions: ${automaton.abstractions.length}",
+      s"max per-state local support: ${automaton.support.values.map(_.length).maxOption.getOrElse(0)}",
+      s"Boolean-summary cells: ${totalCells(automaton)}",
       s"maximum Boolean-summary states: ${maximumStateCount(automaton)}",
       "transition: Section 9 summary recurrence, evaluated on demand",
     ).mkString("\n")
@@ -193,8 +318,9 @@ object BooleanAutomaton:
         "alphabet" -> JArr(automaton.source.alphabet.map(str).toVector),
         "pvwaa_state_count" -> JsonValue.int(automaton.source.states.length),
         "goto_support" -> JArr(automaton.gotoSupport.map(str).toVector),
-        "abstraction_count" -> JsonValue.int(automaton.abstractions.length),
+        "support" -> JObj(automaton.source.states.map(state => state -> JArr(automaton.support(state).map(str).toVector)).toVector),
+        "cell_count" -> JsonValue.bigInt(totalCells(automaton)),
         "maximum_state_count" -> JsonValue.bigInt(maximumStateCount(automaton)),
-        "initial_summary" -> JArr(automaton.initial.table.map(row => JArr(row.map(bool).toVector)).toVector),
+        "initial_summary" -> JObj(automaton.source.states.map(state => state -> JArr(automaton.initial.table(state).map(bool).toVector)).toVector),
       )
     )
