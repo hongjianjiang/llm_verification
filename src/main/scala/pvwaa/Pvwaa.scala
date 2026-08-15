@@ -46,12 +46,11 @@ object Pvwaa:
   import JsonValue.*
 
   /** Does `top(formula, dual, symbol, current)` actually depend on `symbol`?
-    * Only a direct `Atom(SymbolAtom, ...)` leaf does — `Reference` becomes a
-    * `Goto`/`Carry` atom regardless of `symbol`, and `Until` delegates to
-    * `predicate`, which never inspects `symbol` at all. Named definitions
-    * built purely from references to other names (e.g. "this bit is set" as
-    * an OR of every matching alphabet symbol's own named atom) are the
-    * common case for large alphabets, and are therefore fully
+    * Only a direct `Atom(SymbolAtom | BitAtom, ...)` leaf does —
+    * `Reference` becomes a `Goto`/`Carry` atom regardless of `symbol`, and
+    * `Until` delegates to `predicate`, which never inspects `symbol` at
+    * all. Named definitions built purely from references to other names
+    * are the common case for large alphabets, and are therefore fully
     * symbol-independent: `top` would otherwise rebuild an identical,
     * possibly large `PositiveFormula` tree once per alphabet symbol for
     * nothing. Anything not recognized here conservatively answers `true`
@@ -59,14 +58,14 @@ object Pvwaa:
     * optimized) rather than risk caching a formula that does vary.
     */
   private def usesSymbol(formula: Formula): Boolean = formula match
-    case Constant(_) | Reference(_, _)                  => false
-    case Atom(AtomKind.SymbolAtom, Position.I, _)         => true
-    case _: Atom                                          => false
-    case Negation(operand)                                => usesSymbol(operand)
-    case Conjunction(operands)                            => operands.exists(usesSymbol)
-    case Disjunction(operands)                            => operands.exists(usesSymbol)
-    case _: Until                                          => false
-    case _                                                 => true
+    case Constant(_) | Reference(_, _)                                => false
+    case Atom(AtomKind.SymbolAtom | AtomKind.BitAtom, Position.I, _)   => true
+    case _: Atom                                                       => false
+    case Negation(operand)                                             => usesSymbol(operand)
+    case Conjunction(operands)                                         => operands.exists(usesSymbol)
+    case Disjunction(operands)                                         => operands.exists(usesSymbol)
+    case _: Until                                                      => false
+    case _                                                             => true
 
   /** Rewrite `Next`/`Eventually`/`Always` into the `Until`/`Negation` terms
     * `top`, `predicate`, `finalOf`, and `symbolsOf` already handle, via the
@@ -225,7 +224,7 @@ object Pvwaa:
       case Constant(value) => PositiveConstant(value != dual)
       case Atom(kind, variable, sym) =>
         if variable != Position.I then throw PVWAAError("an atom at witness position belongs inside an Until operand")
-        val value = kind == AtomKind.SymbolAtom && sym.contains(symbol)
+        val value = Ltl.symbolMatches(kind, sym, symbol)
         PositiveConstant(value != dual)
       case Reference(name, variable) =>
         if variable != Position.I then throw PVWAAError("a witness reference belongs inside an Until operand")

@@ -18,8 +18,20 @@ import scala.collection.mutable
   * not this project's usual one-named-symbol-per-step model, so the
   * alphabet here is every possible valuation of the declared atomic
   * propositions (`2^|AP|` symbols), with one derived Boolean definition per
-  * proposition (`Disjunction` of every alphabet symbol where that
-  * proposition's bit is set).
+  * proposition, a direct `AtomKind.BitAtom` testing that proposition's own
+  * character of the current symbol.
+  *
+  * Earlier versions instead gave every one of the `2^|AP|` alphabet symbols
+  * its own named `SymbolAtom` definition and defined each proposition as a
+  * `Disjunction` over the (up to `2^|AP|-1`) symbols where its bit is set.
+  * That makes every downstream stage — `Pvwaa`'s `states x alphabet`
+  * transition table foremost — scale with `2^|AP|` states, not `|AP|`
+  * propositions, which is intractable past a dozen or so propositions
+  * (`DoubleCounter`/`Nim`/`SingleCounter`-style benchmarks routinely
+  * declare 12-24). `BitAtom` tests one character of the *concrete* symbol
+  * directly, so a proposition needs exactly one state regardless of
+  * alphabet size, and the `2^|AP|` axis only ever shows up as the (cheap,
+  * O(1)-per-symbol) loop `Pvwaa` already runs to populate that table.
   */
 
 final case class LtlfError(message: String) extends RuntimeException(message)
@@ -222,25 +234,22 @@ object Ltlf:
 
     // LtlToBrasp only accepts named *references* inside Boolean combinations,
     // not bare Atoms (mirroring how BraspToLtl itself always wraps a symbol
-    // atom in its own named SymbolNode definition first) — so every alphabet
-    // symbol gets its own named atom definition upfront.
-    private val symbolNames: Map[String, String] =
-      alphabet.map(symbol => symbol -> define(s"is_$symbol", Formula.Atom(AtomKind.SymbolAtom, Position.I, Some(symbol)))).toMap
-
+    // atom in its own named SymbolNode definition first) — so each
+    // proposition gets its own named atom definition upfront, on first use.
     private val propositionNames = mutable.Map.empty[String, String]
 
-    /** The name of a named definition `p_holds := (disjunction of every
-      * alphabet symbol whose bit for `p` is set)`, built once per
-      * proposition and reused for every occurrence.
+    /** The name of a named definition `p_holds := bit(K)@i`, `K` being
+      * `p`'s own character position in an alphabet symbol string — built
+      * once per proposition and reused for every occurrence. `alphabet`'s
+      * construction above lays out character `bitPos` as the `bitPos`-th
+      * bit of the symbol's index, matching `BitAtom`'s semantics exactly.
       */
     def propositionRef(prop: String): String =
       propositionNames.getOrElseUpdate(
         prop, {
           val bitPosition = atomicPropositions.indexOf(prop)
           if bitPosition < 0 then throw LtlfError(s"undeclared atomic proposition: '$prop'")
-          val matches = alphabet.zipWithIndex.collect { case (symbol, index) if ((index >> bitPosition) & 1) == 1 => symbol }
-          val refs = matches.map(symbol => Formula.Reference(symbolNames(symbol), Position.I))
-          define(prop, Formula.Disjunction(refs))
+          define(prop, Formula.Atom(AtomKind.BitAtom, Position.I, Some(bitPosition.toString)))
         },
       )
 

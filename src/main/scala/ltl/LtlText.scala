@@ -26,7 +26,9 @@ import scala.collection.immutable.VectorMap
   * `alphabet SYM...` (required, one symbol or more — see `BraspText` for
   * why), `evaluate at TEXT`, `output := EXPR`, or `NAME := EXPR`. `EXPR`
   * uses `!`, `&`, `|`, parentheses, `true`/`false`,
-  * `bos@i`/`eos@j`, `sym(SYM)@i`, `NAME@j` references, unary `Y/P/H/X/F/G`,
+  * `bos@i`/`eos@j`, `sym(SYM)@i`, `bit(N)@i` (does character `N` of the
+  * current symbol equal `'1'`? — used for multi-proposition alphabets,
+  * see `Ltlf`), `NAME@j` references, unary `Y/P/H/X/F/G`,
   * and binary `S`/`U` (both temporal operators always implicitly `^i_j`,
   * the only pairing this fragment ever produces). `#` starts a comment.
   */
@@ -48,6 +50,7 @@ object LtlText:
     case Atom(AtomKind.BosAtom, variable, _)          => s"bos@${posText(variable)}"
     case Atom(AtomKind.EosAtom, variable, _)          => s"eos@${posText(variable)}"
     case Atom(AtomKind.SymbolAtom, variable, symbol)  => s"sym(${symbol.getOrElse("")})@${posText(variable)}"
+    case Atom(AtomKind.BitAtom, variable, symbol)     => s"bit(${symbol.getOrElse("")})@${posText(variable)}"
     case Reference(name, variable)                    => s"$name@${posText(variable)}"
     case Negation(operand)                            => s"!(${renderFormula(operand)})"
     case Conjunction(operands)                        => "(" + operands.map(renderFormula).mkString(" & ") + ")"
@@ -233,6 +236,15 @@ object LtlText:
         val symbol = text.substring(start, pos).trim
         pos += 1 // ')'
         Atom(AtomKind.SymbolAtom, position(), Some(symbol))
+      else if tryKeyword("bit", '(') then
+        expectChar('(')
+        skipSpaces()
+        val start = pos
+        while !atEnd && peek != ')' do pos += 1
+        if atEnd then fail("unterminated 'bit(...)'")
+        val index = text.substring(start, pos).trim
+        pos += 1 // ')'
+        Atom(AtomKind.BitAtom, position(), Some(index))
       else if tryKeyword("Y", '(') then Previous(Position.I, Position.J, parenExpr())
       else if tryKeyword("P", '(') then Once(Position.I, Position.J, parenExpr())
       else if tryKeyword("H", '(') then Historically(Position.I, Position.J, parenExpr())

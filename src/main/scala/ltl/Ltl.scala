@@ -10,13 +10,20 @@ import scala.collection.immutable.VectorMap
 
 final case class LtlError(message: String) extends RuntimeException(message)
 
+/** `BitAtom`'s `symbol` field holds a decimal character index (not a
+  * literal alphabet token like `SymbolAtom`'s): it matches iff that
+  * character of the current input symbol is `'1'`. Used by `Ltlf` to test
+  * one atomic proposition directly against a multi-proposition-valuation
+  * alphabet, instead of `SymbolAtom`-testing full valuations one by one.
+  */
 enum AtomKind:
-  case BosAtom, EosAtom, SymbolAtom
+  case BosAtom, EosAtom, SymbolAtom, BitAtom
 
   def jsonLabel: String = this match
     case AtomKind.BosAtom    => "bos"
     case AtomKind.EosAtom    => "eos"
     case AtomKind.SymbolAtom => "symbol"
+    case AtomKind.BitAtom    => "bit"
 
 enum Logic:
   case PastStrict, FutureStrict
@@ -53,6 +60,17 @@ final case class FormulaDag(
 object Ltl:
   import Formula.*
   import JsonValue.*
+
+  /** Does an atom of `kind` with declared field `declared` (`SymbolAtom`'s
+    * literal token, or `BitAtom`'s character index) match the concrete
+    * input symbol `concrete` actually present at this position? `Bos`/`Eos`
+    * atoms never match here (they're positional, not symbol-dependent) —
+    * callers handle those separately.
+    */
+  def symbolMatches(kind: AtomKind, declared: Option[String], concrete: String): Boolean = kind match
+    case AtomKind.SymbolAtom => declared.contains(concrete)
+    case AtomKind.BitAtom    => declared.exists(index => concrete(index.toInt) == '1')
+    case AtomKind.BosAtom | AtomKind.EosAtom => false
 
   /** Exchange strict past and strict future operators under word reversal. */
   def mirror(formula: Formula): Formula = formula match
@@ -109,6 +127,7 @@ object Ltl:
     case Atom(AtomKind.BosAtom, variable, _)    => s"BOS(${variable.render})"
     case Atom(AtomKind.EosAtom, variable, _)    => s"EOS(${variable.render})"
     case Atom(AtomKind.SymbolAtom, variable, symbol) => s"${symbol.getOrElse("")}(${variable.render})"
+    case Atom(AtomKind.BitAtom, variable, symbol) => s"bit${symbol.getOrElse("?")}(${variable.render})"
     case Reference(name, variable) => s"$name(${variable.render})"
     case Negation(operand) => s"¬(${render(operand)})"
     case Conjunction(operands) => "(" + operands.map(render).mkString(" ∧ ") + ")"
@@ -181,14 +200,16 @@ object Ltl:
     logic match
       case Logic.PastStrict =>
         atom.kind match
-          case AtomKind.BosAtom    => position == 0
-          case AtomKind.EosAtom    => position == length
-          case AtomKind.SymbolAtom => position > 0 && position <= length && word(position - 1) == atom.symbol.get
+          case AtomKind.BosAtom => position == 0
+          case AtomKind.EosAtom => position == length
+          case AtomKind.SymbolAtom | AtomKind.BitAtom =>
+            position > 0 && position <= length && symbolMatches(atom.kind, atom.symbol, word(position - 1))
       case Logic.FutureStrict =>
         atom.kind match
-          case AtomKind.EosAtom    => position == length
-          case AtomKind.BosAtom    => position == 0
-          case AtomKind.SymbolAtom => position >= 0 && position < length && word(position) == atom.symbol.get
+          case AtomKind.EosAtom => position == length
+          case AtomKind.BosAtom => position == 0
+          case AtomKind.SymbolAtom | AtomKind.BitAtom =>
+            position >= 0 && position < length && symbolMatches(atom.kind, atom.symbol, word(position))
 
   /** Evaluate one formula under an explicit anchor/witness valuation. */
   def evaluateFormula(

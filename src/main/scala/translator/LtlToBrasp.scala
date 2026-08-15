@@ -66,33 +66,69 @@ object LtlToBrasp:
           "(give it its own named definition instead of nesting it inline)"
       )
 
-  private def translateDefinition(name: String, formula: Formula): Subprogram =
-    normalize(formula) match
-      case Atom(AtomKind.BosAtom, Position.I, _) => Subprogram.Bos(name)
-      case Atom(AtomKind.SymbolAtom, Position.I, Some(symbol)) => Subprogram.SymbolNode(name, symbol)
-      case Atom(_, position, _) =>
-        throw ReverseTranslationError(s"$name: an atom definition must be at position i, not ${position.render}")
-      case Since(_, _, left, right) =>
-        // Lem. 5.2: rewrite `left S right` to `!alpha S (alpha & beta)` with
-        // alpha = right | !left, beta = right, then read off rightmost's args.
-        val alpha = Disjunction(List(right, Negation(left)))
-        Subprogram.RightmostAttention(name, toBooleanExpression(alpha, predicate = true), toBooleanExpression(right, predicate = true))
-      case other => Subprogram.BooleanNode(name, toBooleanExpression(other, predicate = false))
-
   def translate(dag: FormulaDag): Program =
     if dag.logic != Logic.PastStrict then throw ReverseTranslationError("translate expects a strict-past 2LTL DAG")
 
     val subprograms = scala.collection.mutable.ArrayBuffer.empty[Subprogram]
-    val names = scala.collection.mutable.HashSet.empty[String]
-    for (name, formula) <- dag.definitions do
-      subprograms += translateDefinition(name, formula)
-      names += name
+    // Seeded with every definition's own name up front (not grown
+    // incrementally as the loop below visits them) so fresh names picked
+    // for `BitAtom`'s helper subprograms — and for the synthetic output
+    // name below — can never collide with a *later* definition's name
+    // either, not just an earlier one.
+    val names = scala.collection.mutable.HashSet.from(dag.definitions.keys)
+
+    // `BitAtom(index)` (see `Ltl.AtomKind`) has no direct B-RASP equivalent
+    // — B-RASP can only test literal symbol equality (`symbol SYM`) — so
+    // each one expands to `Or` over a fresh `symbol SYM` helper subprogram
+    // per matching alphabet symbol, exactly the construction `Ltlf` itself
+    // used to build eagerly for every symbol before `BitAtom` existed. This
+    // is intentionally lazy and `--brasp`-only: it doesn't run on the
+    // `--btor2`/`--run-ric3` path (`Pvwaa`/`BooleanAutomaton`/`Btor2` never
+    // call into this translator), so it can't reintroduce the `2^|AP|`
+    // blowup `BitAtom` exists to avoid there. Cached per matching alphabet
+    // symbol (not per `BitAtom` occurrence): two propositions whose bit
+    // patterns happen to overlap share the same helper subprograms.
+    val symbolHelpers = scala.collection.mutable.LinkedHashMap.empty[String, String]
+    def helperFor(symbol: String): String =
+      symbolHelpers.getOrElseUpdate(
+        symbol, {
+          var candidate = s"is_$symbol"
+          while names.contains(candidate) do candidate = "_" + candidate
+          names += candidate
+          subprograms += Subprogram.SymbolNode(candidate, symbol)
+          candidate
+        },
+      )
+
+    def translateDefinition(name: String, formula: Formula): Subprogram =
+      normalize(formula) match
+        case Atom(AtomKind.BosAtom, Position.I, _) => Subprogram.Bos(name)
+        case Atom(AtomKind.SymbolAtom, Position.I, Some(symbol)) => Subprogram.SymbolNode(name, symbol)
+        case Atom(AtomKind.BitAtom, Position.I, Some(indexText)) =>
+          val alphabet = dag.alphabet.getOrElse(
+            throw ReverseTranslationError(s"$name: a bit-position atom needs a declared alphabet")
+          )
+          val index = indexText.toInt
+          val matches = alphabet.filter(symbol => symbol(index) == '1')
+          val refs = matches.map(symbol => BooleanExpression.Ref(helperFor(symbol), Position.I))
+          Subprogram.BooleanNode(name, BooleanExpression.Or(refs))
+        case Atom(_, position, _) =>
+          throw ReverseTranslationError(s"$name: an atom definition must be at position i, not ${position.render}")
+        case Since(_, _, left, right) =>
+          // Lem. 5.2: rewrite `left S right` to `!alpha S (alpha & beta)` with
+          // alpha = right | !left, beta = right, then read off rightmost's args.
+          val alpha = Disjunction(List(right, Negation(left)))
+          Subprogram.RightmostAttention(name, toBooleanExpression(alpha, predicate = true), toBooleanExpression(right, predicate = true))
+        case other => Subprogram.BooleanNode(name, toBooleanExpression(other, predicate = false))
+
+    for (name, formula) <- dag.definitions do subprograms += translateDefinition(name, formula)
 
     val outputName = dag.output match
       case Reference(name, Position.I) if names.contains(name) => name
       case _ =>
         var candidate = "__output__"
         while names.contains(candidate) do candidate = "_" + candidate
+        names += candidate
         subprograms += translateDefinition(candidate, dag.output)
         candidate
 
