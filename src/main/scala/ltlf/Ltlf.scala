@@ -280,38 +280,56 @@ object Ltlf:
       * (and, as a bonus, its already-correct EOS-boundary behavior — see
       * `compileToFuture`'s doc comment on why `Eventually`/`Until` don't
       * need special EOS handling but a direct `Always` would).
+      *
+      * Memoized on the input `LtlfFormula` (structural/value equality, same
+      * as `propositionRef`'s cache below): a temporal-operator subformula
+      * that recurs verbatim elsewhere in the source (common in the
+      * arithmetic-style generated benchmarks, e.g. `SingleCounter`'s
+      * repeated carry-bit checks) would otherwise get a fresh `define` —
+      * and so a fresh PVWAA state — at every occurrence instead of sharing
+      * the one already compiled. Left unmemoized, that duplication doesn't
+      * show up as merely a few extra lines: each duplicate adds its own
+      * entry to `gotoSupport`, and every state whose local support includes
+      * it pays for that with a *doubling* of its `2^|support|`-sized
+      * Boolean-summary table (`BooleanAutomaton.fromForwardPvwaa`) — the
+      * same exponent every backend (`Lustre`/`Kind2`/`Btor2`/`Aiger`)
+      * materializes one register/cell per entry of.
       */
-    def compile(formula: LtlfFormula): Formula = formula match
-      case F.True       => Formula.Constant(true)
-      case F.False      => Formula.Constant(false)
-      case F.Prop(name) => Formula.Reference(propositionRef(name), Position.I)
-      case F.Not(operand)     => Formula.Negation(compile(operand))
-      case F.And(left, right) => Formula.Conjunction(List(compile(left), compile(right)))
-      case F.Or(left, right)  => Formula.Disjunction(List(compile(left), compile(right)))
-      case F.Next(operand) =>
-        val name = nameOf(operand)
-        val bareName = define("x_strict", Formula.Next(Position.I, Position.J, Formula.Reference(name, Position.J)))
-        Formula.Reference(bareName, Position.I)
-      case F.Eventually(operand) =>
-        val name = nameOf(operand)
-        val bareName = define("f_strict", Formula.Eventually(Position.I, Position.J, Formula.Reference(name, Position.J)))
-        Formula.Disjunction(List(Formula.Reference(name, Position.I), Formula.Reference(bareName, Position.I)))
-      case F.Always(operand) => compile(F.Not(F.Eventually(F.Not(operand))))
-      case F.Until(left, right) =>
-        val leftName = nameOf(left)
-        val rightName = nameOf(right)
-        val bareName = define(
-          "u_strict",
-          Formula.Until(Position.I, Position.J, Formula.Reference(leftName, Position.J), Formula.Reference(rightName, Position.J)),
-        )
-        Formula.Disjunction(
-          List(
-            Formula.Reference(rightName, Position.I),
-            Formula.Conjunction(List(Formula.Reference(leftName, Position.I), Formula.Reference(bareName, Position.I))),
+    private val compileCache = mutable.Map.empty[LtlfFormula, Formula]
+    def compile(formula: LtlfFormula): Formula = compileCache.getOrElseUpdate(
+      formula,
+      formula match
+        case F.True       => Formula.Constant(true)
+        case F.False      => Formula.Constant(false)
+        case F.Prop(name) => Formula.Reference(propositionRef(name), Position.I)
+        case F.Not(operand)     => Formula.Negation(compile(operand))
+        case F.And(left, right) => Formula.Conjunction(List(compile(left), compile(right)))
+        case F.Or(left, right)  => Formula.Disjunction(List(compile(left), compile(right)))
+        case F.Next(operand) =>
+          val name = nameOf(operand)
+          val bareName = define("x_strict", Formula.Next(Position.I, Position.J, Formula.Reference(name, Position.J)))
+          Formula.Reference(bareName, Position.I)
+        case F.Eventually(operand) =>
+          val name = nameOf(operand)
+          val bareName = define("f_strict", Formula.Eventually(Position.I, Position.J, Formula.Reference(name, Position.J)))
+          Formula.Disjunction(List(Formula.Reference(name, Position.I), Formula.Reference(bareName, Position.I)))
+        case F.Always(operand) => compile(F.Not(F.Eventually(F.Not(operand))))
+        case F.Until(left, right) =>
+          val leftName = nameOf(left)
+          val rightName = nameOf(right)
+          val bareName = define(
+            "u_strict",
+            Formula.Until(Position.I, Position.J, Formula.Reference(leftName, Position.J), Formula.Reference(rightName, Position.J)),
           )
-        )
-      case F.Implies(_, _) | F.Iff(_, _) | F.Release(_, _) | F.WeakUntil(_, _) | F.WeakNext(_) =>
-        throw LtlfError(s"internal error: $formula should have been desugared before compilation")
+          Formula.Disjunction(
+            List(
+              Formula.Reference(rightName, Position.I),
+              Formula.Conjunction(List(Formula.Reference(leftName, Position.I), Formula.Reference(bareName, Position.I))),
+            )
+          )
+        case F.Implies(_, _) | F.Iff(_, _) | F.Release(_, _) | F.WeakUntil(_, _) | F.WeakNext(_) =>
+          throw LtlfError(s"internal error: $formula should have been desugared before compilation"),
+    )
 
     // Lazy: only ever materialized if some formula actually needs an
     // operand named (i.e. contains a temporal operator at all).
@@ -328,9 +346,18 @@ object Ltlf:
       * exclude it". So every operand definition bakes in its own
       * `¬EOS ∧ ...` guard once, here, rather than needing it repeated at
       * every place the operand gets referenced.
+      * Memoized like `compile` above, and for the same reason: `Until`
+      * names its left and right operands via separate calls, so without
+      * this cache two `Until`s sharing an identical operand (or an
+      * operand identical to some other temporal operator's) would still
+      * get two separate `sub_N` definitions and two separate PVWAA states.
       */
+    private val nameOfCache = mutable.Map.empty[LtlfFormula, String]
     private def nameOf(formula: LtlfFormula): String =
-      define(labelFor(formula), Formula.Conjunction(List(Formula.Negation(Formula.Reference(eosName, Position.I)), compile(formula))))
+      nameOfCache.getOrElseUpdate(
+        formula,
+        define(labelFor(formula), Formula.Conjunction(List(Formula.Negation(Formula.Reference(eosName, Position.I)), compile(formula)))),
+      )
 
   /** Compile a (not-yet-desugared) LTLf formula into a strict-future
     * `FormulaDag`, faithful to standard non-strict LTLf semantics (`X`/`F`/

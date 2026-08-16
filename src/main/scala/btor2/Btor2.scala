@@ -29,10 +29,24 @@ object Btor2:
   private final class Builder:
     val lines = mutable.ArrayBuffer.empty[String]
     private var counter = 0
+    private val gateCache = mutable.Map.empty[String, Int]
     def emit(rest: String): Int =
       counter += 1
       lines += s"$counter $rest"
       counter
+
+    /** Hash-consed variant of `emit` for pure combinational gates (`and`,
+      * `or`, `ite`, `eq`): the output is a pure function of the operator and
+      * operand ids, so an identical `rest` string always denotes the same
+      * value and can reuse a prior line instead of re-emitting it. This
+      * matters a lot in practice: e.g. `symbolCase`'s `eq $sortSymbol
+      * $symbolInput <k>` line — "does the shared `symbol` input equal
+      * alphabet index k" — is the exact same gate no matter which `(state,
+      * abstraction)` summary cell is being built, but without this cache it
+      * was being re-emitted once per cell, multiplying the model by
+      * `states * abstractions-per-state`.
+      */
+    def gate(rest: String): Int = gateCache.getOrElseUpdate(rest, emit(rest))
 
   private def symbolWidth(alphabetSize: Int): Int =
     if alphabetSize <= 1 then 1 else 32 - Integer.numberOfLeadingZeros(alphabetSize - 1)
@@ -107,7 +121,7 @@ object Btor2:
         else
           val trueBranch = select(index + (1 << (bits.length - depth - 1)), depth + 1)
           val falseBranch = select(index, depth + 1)
-          b.emit(s"ite $sortBool ${bits(depth)} $trueBranch $falseBranch")
+          b.gate(s"ite $sortBool ${bits(depth)} $trueBranch $falseBranch")
       select(0, 0)
 
     /** `Lustre.generate`'s `diagonalEquations`: solve the summary recurrence
@@ -130,9 +144,9 @@ object Btor2:
     def transitionFormula(owner: String, ownerAbstraction: Vector[Boolean], formula: PositiveFormula): Int = formula match
       case PositiveFormula.PositiveConstant(value) => boolConst(value)
       case PositiveFormula.PositiveAnd(operands) =>
-        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption((a, c) => b.emit(s"and $sortBool $a $c")).getOrElse(one)
+        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption((a, c) => b.gate(s"and $sortBool $a $c")).getOrElse(one)
       case PositiveFormula.PositiveOr(operands) =>
-        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption((a, c) => b.emit(s"or $sortBool $a $c")).getOrElse(zero)
+        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption((a, c) => b.gate(s"or $sortBool $a $c")).getOrElse(zero)
       case PositiveFormula.TransitionAtom(state, action) =>
         val ownerIndex = automaton.supportIndex(owner)
         action match
@@ -145,9 +159,9 @@ object Btor2:
     def symbolCase(state: String, abstraction: Vector[Boolean]): Int =
       val base = oldSummary((state, abstraction))
       alphabet.zipWithIndex.foldRight(base) { case ((symbol, index), acc) =>
-        val eq = b.emit(s"eq $sortBool $symbolInput ${constIndex(index)}")
+        val eq = b.gate(s"eq $sortBool $symbolInput ${constIndex(index)}")
         val transition = transitionFormula(state, abstraction, automaton.source.transitions((state, symbol)))
-        b.emit(s"ite $sortBool $eq $transition $acc")
+        b.gate(s"ite $sortBool $eq $transition $acc")
       }
 
     val curSummary = mutable.Map.empty[(String, Vector[Boolean]), Int]
