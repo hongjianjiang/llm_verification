@@ -24,6 +24,11 @@ object Lustre:
     */
   def generate(automaton: ReverseBooleanAutomaton, nodeName: String = "brasp_monitor"): String =
     if automaton.source.alphabet.isEmpty then throw LustreError("the Lustre backend requires a non-empty alphabet")
+    // This backend still builds one explicit variable per (state, local
+    // abstraction) summary cell below — unlike `BooleanAutomaton`'s own
+    // BDD-based `transition`/`diagonal`, which no longer need this check.
+    try BooleanAutomaton.checkSupportSize(automaton)
+    catch case PVWAAError(message) => throw LustreError(message)
     val node = identifier(nodeName)
     val states = automaton.source.states
     val stateIndex = states.zipWithIndex.toMap
@@ -115,7 +120,10 @@ object Lustre:
       val cur = summaryName("cur", state, abstraction)
       declarations += s"  $old: bool;"
       declarations += s"  $cur: bool;"
-      val initialLiteral = if automaton.initial.table(state)(abstractionIndexOf(state, abstraction)) then "true" else "false"
+      // The initial summary doesn't depend on any goto-support bit yet
+      // (nothing has been consumed), so every abstraction of a state
+      // starts at the same constant: whether it's a final PVWAA state.
+      val initialLiteral = if automaton.source.finalStates.contains(state) then "true" else "false"
       equations += s"  $old = $initialLiteral -> (if start then $initialLiteral else pre($cur));"
     declarations ++= states.map(state => s"  ${diagonalName("old", state)}: bool;")
     declarations ++= states.map(state => s"  ${diagonalName("cur", state)}: bool;")

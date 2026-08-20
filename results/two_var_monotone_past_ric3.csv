@@ -1,0 +1,18 @@
+sigma,source,wall_time_s,verdict,notes
+2,builtin,0.6,NOT_PROVED,
+4,builtin,0.5,NOT_PROVED,
+8,builtin,0.6,NOT_PROVED,
+10,generated,0.6,NOT_PROVED,
+12,generated,0.6,NOT_PROVED,
+14,generated,0.7,NOT_PROVED,
+15,generated,0.6,NOT_PROVED,
+16,builtin,150.5,CRASH,rIC3 native stack overflow (rc=134); reproduced on an independently-regenerated sigma=16 formula too, not specific to this file
+17,generated,0.8,NOT_PROVED,
+18,generated,0.8,NOT_PROVED,
+20,generated,0.8,NOT_PROVED,
+24,generated,0.8,NOT_PROVED,
+25,generated,1.0,NOT_PROVED,
+26,generated,0.9,NOT_PROVED,
+28,generated,1.0,NOT_PROVED,
+32,builtin,1.1,NOT_PROVED,
+64,generated,,PARSE_ERROR,translation never reaches rIC3 -- Scala's recursive-descent .ltl parser hits JVM StackOverflowError on the 2016-term OR chain

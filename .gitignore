@@ -14,6 +14,6 @@ logs/
 .idea/
 .vscode/
 *.iml
-
+docs/
 # OS
 .DS_Store

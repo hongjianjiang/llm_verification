@@ -64,7 +64,7 @@ object Ric3:
     * answer, already known at compile time (see `Btor2`'s doc-comment) — it
     * does not come from rIC3.
     */
-  def summarize(stdout: String, goal: String, alphabet: List[String], emptyBad: Boolean): String =
+  def summarize(stdout: String, goal: String, alphabet: List[String], emptyBad: Boolean, reverseWitness: Boolean = false): String =
     val outcome =
       if stdout.contains("UNSAT") then "unsat"
       else if stdout.contains("UNKNOWN") then "unknown"
@@ -100,7 +100,9 @@ object Ric3:
         case _             => "no nonempty bad prefix"
       val mainMark = if mainProved then "✓" else if outcome == "unknown" then "?" else "✗"
       var mainLine = s"  $mainMark $mainLabel ($outcome)"
-      if outcome == "sat" then mainLine += s" — witness: ${renderWord(counterexampleWord(stdout, alphabet))}"
+      if outcome == "sat" then
+        val word = counterexampleWord(stdout, alphabet).map(w => if reverseWitness then w.reverse else w)
+        mainLine += s" — witness: ${renderWord(word)}"
       lines += mainLine
 
       val emptyLabel = goal match
@@ -128,6 +130,7 @@ object Ric3:
       emptyBad: Boolean,
       mode: String = "ic3",
       rawOutput: Boolean = false,
+      reverseWitness: Boolean = false,
   ): Int =
     if !executable.isFile then throw Ric3Error(s"rIC3 executable not found: $executable")
     if !executable.canExecute then throw Ric3Error(s"rIC3 executable is not executable: $executable")
@@ -149,6 +152,6 @@ object Ric3:
       catch case error: Exception => throw Ric3Error(s"could not run rIC3: ${error.getMessage}")
     val stdoutText = stdoutBuffer.toString(StandardCharsets.UTF_8)
     val stderrText = stderrBuffer.toString(StandardCharsets.UTF_8)
-    if rawOutput then print(stdoutText) else println(summarize(stdoutText, goal, alphabet, emptyBad))
+    if rawOutput then print(stdoutText) else println(summarize(stdoutText, goal, alphabet, emptyBad, reverseWitness))
     if stderrText.nonEmpty then Console.err.print(stderrText)
     exitCode

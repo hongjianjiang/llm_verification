@@ -24,11 +24,19 @@ final case class CliArgs(
     kind2Bin: File,
     kind2Json: Boolean = false,
     btor2: Boolean = false,
+    btor2MaxStates: Int = 4096,
     runRic3: Boolean = false,
+    runNative: Boolean = false,
+    nativeMaxStates: Int = 4096,
+    direct: Boolean = false,
+    runDirect: Boolean = false,
+    directAiger: Boolean = false,
+    runDirectAbc: Boolean = false,
     ric3Bin: File,
     ric3Mode: String = "ic3",
     ric3Raw: Boolean = false,
     aiger: Boolean = false,
+    aigerMaxStates: Int = 4096,
     runAbc: Boolean = false,
     abcBin: File,
     abcRaw: Boolean = false,
@@ -80,11 +88,19 @@ object Translator:
     var kind2Bin: File = defaultKind2Bin
     var kind2Json = false
     var btor2Out = false
+    var btor2MaxStates = 4096
     var runRic3 = false
+    var runNative = false
+    var nativeMaxStates = 4096
+    var directOut = false
+    var runDirect = false
+    var directAigerOut = false
+    var runDirectAbc = false
     var ric3Bin: File = defaultRic3Bin
     var ric3Mode = "ic3"
     var ric3Raw = false
     var aigerOut = false
+    var aigerMaxStates = 4096
     var runAbc = false
     var abcBin: File = defaultAbcBin
     var abcRaw = false
@@ -112,11 +128,25 @@ object Translator:
         case "--kind2-bin"          => kind2Bin = File(takeValue("--kind2-bin", it))
         case "--kind2-json"         => kind2Json = true
         case "--btor2"              => btor2Out = true
+        case "--btor2-max-states"   =>
+          val raw = takeValue("--btor2-max-states", it)
+          btor2MaxStates = raw.toIntOption.getOrElse(fail(s"argument --btor2-max-states: expected an integer, got '$raw'"))
         case "--run-ric3"           => runRic3 = true
+        case "--run-native"         => runNative = true
+        case "--native-max-states"  =>
+          val raw = takeValue("--native-max-states", it)
+          nativeMaxStates = raw.toIntOption.getOrElse(fail(s"argument --native-max-states: expected an integer, got '$raw'"))
+        case "--direct"             => directOut = true
+        case "--run-direct"         => runDirect = true
+        case "--direct-aiger"       => directAigerOut = true
+        case "--run-direct-abc"     => runDirectAbc = true
         case "--ric3-bin"           => ric3Bin = File(takeValue("--ric3-bin", it))
         case "--ric3-mode"          => ric3Mode = takeValue("--ric3-mode", it)
         case "--ric3-raw"           => ric3Raw = true
         case "--aiger"              => aigerOut = true
+        case "--aiger-max-states"   =>
+          val raw = takeValue("--aiger-max-states", it)
+          aigerMaxStates = raw.toIntOption.getOrElse(fail(s"argument --aiger-max-states: expected an integer, got '$raw'"))
         case "--run-abc"            => runAbc = true
         case "--abc-bin"            => abcBin = File(takeValue("--abc-bin", it))
         case "--abc-raw"            => abcRaw = true
@@ -144,11 +174,19 @@ object Translator:
       kind2Bin = kind2Bin,
       kind2Json = kind2Json,
       btor2 = btor2Out,
+      btor2MaxStates = btor2MaxStates,
       runRic3 = runRic3,
+      runNative = runNative,
+      nativeMaxStates = nativeMaxStates,
+      direct = directOut,
+      runDirect = runDirect,
+      directAiger = directAigerOut,
+      runDirectAbc = runDirectAbc,
       ric3Bin = ric3Bin,
       ric3Mode = ric3Mode,
       ric3Raw = ric3Raw,
       aiger = aigerOut,
+      aigerMaxStates = aigerMaxStates,
       runAbc = runAbc,
       abcBin = abcBin,
       abcRaw = abcRaw,
@@ -232,6 +270,51 @@ object Translator:
   private def toFuture(dag: FormulaDag): FormulaDag =
     if dag.logic == Logic.FutureStrict then dag else mirrorToFuture(dag)
 
+  /** `--run-native`'s verdict: the same three-way PROVED/NOT PROVED/UNKNOWN
+    * shape `Ric3.summarize`/`Abc`'s summaries use, but computed entirely
+    * in-process from `BooleanAutomaton.reachable` — no BTOR2/AIGER model,
+    * no external solver. `dfa.truncated` (the exploration budget was too
+    * small to reach a verdict either way) is this check's only source of
+    * `UNKNOWN`; unlike an external solver there is no timeout/resource
+    * notion beyond that budget.
+    */
+  def nativeSummary(dfa: ReachableDfa, alphabet: List[String], goal: String, emptyBad: Boolean): String =
+    if dfa.truncated then
+      goal match
+        case "inclusion"   => s"brasp-native: UNKNOWN — inclusion not decided within ${dfa.stateCount} states (raise --native-max-states)."
+        case "equivalence" => s"brasp-native: UNKNOWN — equivalence not decided within ${dfa.stateCount} states (raise --native-max-states)."
+        case _             => s"brasp-native: UNKNOWN — safety not decided within ${dfa.stateCount} states (raise --native-max-states)."
+    else
+      val nonemptyWitness = BooleanAutomaton.witness(dfa, alphabet)
+      val mainProved = nonemptyWitness.isEmpty
+      val allProved = mainProved && !emptyBad
+      val heading =
+        if allProved then
+          goal match
+            case "inclusion"   => "brasp-native: PROVED — inclusion holds."
+            case "equivalence" => "brasp-native: PROVED — the languages are equivalent."
+            case _             => "brasp-native: PROVED — no bad prefix is reachable."
+        else
+          goal match
+            case "inclusion"   => "brasp-native: NOT PROVED — a counterexample was found."
+            case "equivalence" => "brasp-native: NOT PROVED — the languages differ."
+            case _             => "brasp-native: NOT PROVED — a bad prefix is reachable."
+      val mainLabel = goal match
+        case "inclusion"   => "no nonempty counterexample"
+        case "equivalence" => "no nonempty distinguishing word"
+        case _             => "no nonempty bad prefix"
+      val mainMark = if mainProved then "✓" else "✗"
+      var mainLine = s"  $mainMark $mainLabel (${if mainProved then "unsat" else "sat"})"
+      nonemptyWitness.foreach(word => mainLine += s" — witness: ${if word.isEmpty then "ε" else word.mkString(" ")}")
+      val emptyLabel = goal match
+        case "inclusion"   => "no empty-word counterexample"
+        case "equivalence" => "no empty-word distinction"
+        case _             => "no empty-word bad prefix"
+      val emptyMark = if !emptyBad then "✓" else "✗"
+      var emptyLine = s"  $emptyMark $emptyLabel (${if emptyBad then "sat" else "unsat"})"
+      if emptyBad then emptyLine += " — witness: ε"
+      List(heading, mainLine, emptyLine).mkString("\n")
+
   /** Split `--word` text into symbols: whitespace-separated if it contains
     * whitespace (for multi-character symbols), otherwise one symbol per
     * character (for the common single-character-alphabet case) — unless
@@ -290,10 +373,10 @@ object Translator:
         val needsBooleanAutomaton =
           parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined || parsed.kind2Safety ||
             parsed.lustre || parsed.booleanAutomaton || parsed.btor2 || parsed.runRic3 ||
-            parsed.aiger || parsed.runAbc
+            parsed.runNative || parsed.aiger || parsed.runAbc
         if needsBooleanAutomaton then
           CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(translated))))
-        else if parsed.pvwaa then
+        else if parsed.pvwaa || parsed.direct || parsed.runDirect || parsed.directAiger || parsed.runDirectAbc then
           CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(translated)))
         else if parsed.future then
           CompileResult.Dag(mirrorToFuture(translated))
@@ -355,7 +438,12 @@ object Translator:
             if parsed.kind2Subset.isDefined then "subset_monitor"
             else if parsed.kind2Equivalent.isDefined then "equivalence_monitor"
             else "brasp_monitor"
-          val model = Btor2.generateSafety(automaton, monitorName)
+          val model =
+            try Btor2.generateSafetyAuto(automaton, monitorName, parsed.btor2MaxStates)
+            catch
+              case Btor2Error(message) =>
+                System.err.println(s"translator: $message")
+                return 2
           if parsed.runRic3 then
             try
               val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
@@ -365,13 +453,21 @@ object Translator:
                 System.err.println(s"translator: $message")
                 return 2
           println(model)
+        else if parsed.runNative then
+          val goal =
+            if parsed.kind2Subset.isDefined then "inclusion"
+            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            else "safety"
+          val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+          val dfa = BooleanAutomaton.reachable(automaton, parsed.nativeMaxStates)
+          println(nativeSummary(dfa, automaton.source.alphabet, goal, emptyBad))
         else if parsed.runAbc || parsed.aiger then
           val goal =
             if parsed.kind2Subset.isDefined then "inclusion"
             else if parsed.kind2Equivalent.isDefined then "equivalence"
             else "safety"
           val model =
-            try Aiger.generateSafety(automaton)
+            try Aiger.generateSafetyAuto(automaton, parsed.aigerMaxStates)
             catch
               case AigerError(message) =>
                 System.err.println(s"translator: $message")
@@ -392,11 +488,21 @@ object Translator:
             else if parsed.kind2Equivalent.isDefined then "equivalence"
             else "safety"
           val harness =
-            if parsed.kind2Subset.isDefined then
-              Kind2.generateSafety(automaton, monitorName = "subset_monitor", mainName = "kind2_subset")
-            else if parsed.kind2Equivalent.isDefined then
-              Kind2.generateSafety(automaton, monitorName = "equivalence_monitor", mainName = "kind2_equivalence")
-            else Kind2.generateSafety(automaton)
+            try
+              if parsed.kind2Subset.isDefined then
+                Kind2.generateSafety(automaton, monitorName = "subset_monitor", mainName = "kind2_subset")
+              else if parsed.kind2Equivalent.isDefined then
+                Kind2.generateSafety(automaton, monitorName = "equivalence_monitor", mainName = "kind2_equivalence")
+              else Kind2.generateSafety(automaton)
+            catch
+              // Kind2.generateSafety delegates to Lustre.generate internally
+              // and doesn't rewrap its errors, so both types can surface here.
+              case Kind2Error(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+              case LustreError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
           if parsed.runKind2 then
             try return Kind2.run(harness, parsed.kind2Bin, goal, automaton.source.alphabet, parsed.kind2Json)
             catch
@@ -405,14 +511,51 @@ object Translator:
                 return 2
           println(harness)
         else if parsed.lustre then
-          println(Lustre.generate(automaton))
+          try println(Lustre.generate(automaton))
+          catch
+            case LustreError(message) =>
+              System.err.println(s"translator: $message")
+              return 2
         else
           trySaveArtifact(graphOutputPath(parsed.input, suffix = "boolean_automaton"), BooleanAutomaton.toDot(automaton)) match
             case Some(code) => return code
             case None       => ()
           println(if parsed.json then Json.render(BooleanAutomaton.toJson(automaton)) else BooleanAutomaton.render(automaton))
       case CompileResult.PvwaaResult(automaton) =>
-        if parsed.dot then
+        if parsed.runDirect || parsed.direct then
+          val model =
+            try DirectPvwaa.generateSafety(automaton)
+            catch
+              case DirectPvwaaError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          if parsed.runDirect then
+            try
+              val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
+              return Ric3.run(model, parsed.ric3Bin, "safety", automaton.alphabet, emptyBad, parsed.ric3Mode, parsed.ric3Raw, reverseWitness = true)
+            catch
+              case Ric3Error(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          println(model)
+        else if parsed.runDirectAbc || parsed.directAiger then
+          val model =
+            try DirectPvwaa.generateSafetyAiger(automaton)
+            catch
+              case DirectPvwaaError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          if parsed.runDirectAbc then
+            try
+              val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
+              return Abc.run(model, parsed.abcBin, "safety", emptyBad, parsed.abcRaw)
+            catch
+              case AbcError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          System.out.write(model)
+          System.out.flush()
+        else if parsed.dot then
           val dot = Pvwaa.toDot(automaton)
           trySaveArtifact(graphOutputPath(parsed.input, suffix = "pvwaa"), dot) match
             case Some(code) => return code

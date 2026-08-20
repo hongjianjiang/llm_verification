@@ -84,6 +84,11 @@ object Aiger:
     */
   def generateSafety(automaton: ReverseBooleanAutomaton): Array[Byte] =
     if automaton.source.alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
+    // This backend still builds one explicit register per (state, local
+    // abstraction) summary cell below — unlike `BooleanAutomaton`'s own
+    // BDD-based `transition`/`diagonal`, which no longer need this check.
+    try BooleanAutomaton.checkSupportSize(automaton)
+    catch case PVWAAError(message) => throw AigerError(message)
     val b = Builder()
     val states = automaton.source.states
     val stateIndex = states.zipWithIndex.toMap
@@ -129,7 +134,10 @@ object Aiger:
       abstraction <- abstractionsOf(state)
     do
       physicalLatch((state, abstraction)) = b.freshVar()
-      resetsHigh((state, abstraction)) = automaton.initial.table(state)(abstractionIndexOf(state, abstraction))
+      // The initial summary doesn't depend on any goto-support bit yet
+      // (nothing has been consumed), so every abstraction of a state
+      // starts at the same constant: whether it's a final PVWAA state.
+      resetsHigh((state, abstraction)) = automaton.source.finalStates.contains(state)
 
     def trueOldLit(state: String, abstraction: Vector[Boolean]): Int =
       val key = (state, abstraction)
@@ -224,3 +232,137 @@ object Aiger:
       writeLine(s"symbol = $index represents input symbol '$symbol' (bit-blasted, $width-bit).")
 
     out.toByteArray
+
+  /** Emit an AIGER model for `dfa` (`BooleanAutomaton.reachable`'s explicit
+    * exploration of the automaton's *actually* reachable states) directly:
+    * `ceil(log2(stateCount))` latches encoding the current state in binary,
+    * plus a next-state lookup over `dfa.transitions` — the AIGER mirror of
+    * `Btor2.generateSafetyFromDfa`. See that doc-comment for why `dfa` must
+    * not be `truncated`, and why this encoding's size tracks the
+    * automaton's real reachable-state count rather than the syntactic
+    * `2^|local support|` bound `generateSafety` is stuck with.
+    *
+    * `dfa.initial` is always `0` (see `ReachableDfa`'s doc-comment), so
+    * unlike `generateSafety`'s summary latches, no reset-polarity XOR trick
+    * is needed here: every state latch already means what it says, and
+    * physically resets to the all-zero (= initial) state for free.
+    *
+    * `dfa` is minimized (`BooleanAutomaton.minimize`) before encoding —
+    * see `Btor2.generateSafetyFromDfa`'s doc-comment for why (on real
+    * specs, `reachable`'s exact-equality dedup routinely leaves states
+    * behind that `minimize` merges for free). `minimize` guarantees its
+    * output's initial state is still block `0`, so the no-XOR-trick
+    * property above continues to hold after minimizing too.
+    */
+  def generateSafetyFromDfa(rawDfa: ReachableDfa, alphabet: List[String]): Array[Byte] =
+    if alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
+    if rawDfa.truncated then
+      throw AigerError(
+        "cannot encode a truncated reachable-state exploration as hardware (it would be unsound) " +
+          "— raise the state cap, or this falls back to the explicit-table encoding automatically via generateSafetyAuto"
+      )
+    val dfa = BooleanAutomaton.minimize(rawDfa, alphabet)
+    val b = Builder()
+    val alphabetSize = alphabet.length
+    val stateCount = math.max(dfa.stateCount, 1)
+
+    val width = symbolWidth(alphabetSize)
+    if alphabetSize < (1 << width) then
+      throw AigerError(
+        s"the AIGER backend doesn't support non-power-of-two alphabets yet (alphabet size $alphabetSize needs a $width-bit symbol range constraint, which AIGER has no native way to express the way BTOR2's `constraint` line does)"
+      )
+    val inputVars = Vector.fill(width)(b.freshVar())
+    val inputLits = inputVars.map(v => b.lit(v))
+
+    // Every latch must exist before any AND gate does (AIGER numbers
+    // variables positionally by role), so allocate all `stateBits` of them
+    // up front, same as `generateSafety`'s summary latches.
+    val stateBits = symbolWidth(stateCount)
+    val stateLatchVars = Vector.fill(stateBits)(b.freshVar())
+    val curStateLits = stateLatchVars.map(v => b.lit(v))
+
+    def symbolEquals(index: Int): Int =
+      (0 until width).foldLeft(b.True) { (acc, bitPos) =>
+        val bit = if ((index >> bitPos) & 1) == 1 then b.True else b.False
+        b.and(acc, b.xnor(inputLits(bitPos), bit))
+      }
+    val symbolEqLits = alphabet.indices.map(symbolEquals).toVector
+
+    def stateEquals(value: Int): Int =
+      (0 until stateBits).foldLeft(b.True) { (acc, bitPos) =>
+        val bit = if ((value >> bitPos) & 1) == 1 then b.True else b.False
+        b.and(acc, b.xnor(curStateLits(bitPos), bit))
+      }
+    val stateEqLits = (0 until stateCount).map(stateEquals).toVector
+
+    def targetBit(target: Int, bitPos: Int): Int = if ((target >> bitPos) & 1) == 1 then b.True else b.False
+
+    // next-state bit `bitPos`, as a function of the current-state latches
+    // and the symbol input: select `state`'s row via `stateEqLits`, then
+    // within that row select the symbol's target bit via `symbolEqLits` —
+    // the bit-blasted mirror of `Btor2.generateSafetyFromDfa`'s two nested
+    // cascading equality chains.
+    def nextBit(bitPos: Int): Int =
+      (0 until stateCount).foldRight(b.False) { case (state, outer) =>
+        val perSymbol = alphabet.indices.foldRight(b.False) { case (index, inner) =>
+          val target = targetBit(dfa.transitions((state, alphabet(index))), bitPos)
+          b.ite(symbolEqLits(index), target, inner)
+        }
+        b.ite(stateEqLits(state), perSymbol, outer)
+      }
+    val nextBits = (0 until stateBits).map(nextBit).toVector
+
+    // bad = "the state reached by consuming this step's symbol accepts" —
+    // matches `generateSafety`'s `curDiagonal`, the *post*-transition
+    // diagonal, not the pre-transition latches.
+    def nextStateEquals(state: Int): Int =
+      (0 until stateBits).foldLeft(b.True) { (acc, bitPos) => b.and(acc, b.xnor(nextBits(bitPos), targetBit(state, bitPos))) }
+    val badLit = dfa.accepting.toList.sorted.foldLeft(b.False) { (acc, state) => b.or(acc, nextStateEquals(state)) }
+
+    val out = new ByteArrayOutputStream()
+    def writeLine(text: String): Unit = out.write((text + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII))
+
+    writeLine(s"aig ${b.maxVar} $width $stateBits 1 ${b.andGates.length}")
+    for nextLit <- nextBits do writeLine(nextLit.toString)
+    writeLine(badLit.toString)
+    for (outLit, aLit, cLit) <- b.andGates do
+      val rhsHigh = math.max(aLit, cLit)
+      val rhsLow = math.min(aLit, cLit)
+      encodeDelta(out, outLit - rhsHigh)
+      encodeDelta(out, rhsHigh - rhsLow)
+    writeLine("c")
+    for (symbol, index) <- alphabet.zipWithIndex do
+      writeLine(s"symbol = $index represents input symbol '$symbol' (bit-blasted, $width-bit).")
+
+    out.toByteArray
+
+  /** The AIGER mirror of `Btor2.quickDfaWork` — see that constant's
+    * doc-comment.
+    */
+  private val quickDfaWork = 256
+
+  /** Prefer a small, bounded `BooleanAutomaton.reachable` + `minimize`
+    * attempt first (`quickDfaWork`), then the per-state Boolean-summary
+    * table encoding (`generateSafety`) whenever `checkSupportSize` passes,
+    * then a full-`maxStates`-budget retry of the reachable-DFA encoding
+    * (`generateSafetyFromDfa`) as a last resort — the AIGER mirror of
+    * `Btor2.generateSafetyAuto`; see its doc-comment for the full reasoning
+    * behind this ordering.
+    */
+  def generateSafetyAuto(automaton: ReverseBooleanAutomaton, maxStates: Int = 4096): Array[Byte] =
+    val quickBudget = math.min(maxStates, quickDfaWork / math.max(1, automaton.source.alphabet.length))
+    val quickDfa = if quickBudget > 0 then Some(BooleanAutomaton.reachable(automaton, quickBudget)).filterNot(_.truncated) else None
+    quickDfa match
+      case Some(dfa) => generateSafetyFromDfa(dfa, automaton.source.alphabet)
+      case None =>
+        val supportFits =
+          try
+            BooleanAutomaton.checkSupportSize(automaton)
+            true
+          catch case _: PVWAAError => false
+        if supportFits then generateSafety(automaton)
+        else if maxStates > quickBudget then
+          val dfa = BooleanAutomaton.reachable(automaton, maxStates)
+          if !dfa.truncated then generateSafetyFromDfa(dfa, automaton.source.alphabet)
+          else generateSafety(automaton)
+        else generateSafety(automaton)

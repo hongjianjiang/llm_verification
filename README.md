@@ -80,6 +80,7 @@ program); with none of those, the goal defaults to plain safety — the same
 | Flag | Effect |
 | --- | --- |
 | `--btor2` | print the BTOR2 model instead of the plain automaton/Lustre |
+| `--btor2-max-states N` | reachable-state cap for the compact DFA encoding below (default 4096) |
 | `--run-ric3` | run rIC3 on it and print a summary (implies `--btor2`) |
 | `--ric3-bin PATH` | rIC3 executable (default `../rIC3/target/release/ric3`, sibling to this repo) |
 | `--ric3-mode ic3\|portfolio` | `ric3 check` subcommand — single-thread IC3 (default) or 16-thread portfolio |
@@ -91,14 +92,25 @@ dev environments (this one included) — pass `--ric3-mode portfolio`
 explicitly once you've confirmed `fork()` works fine in yours, e.g. for
 larger models where the single-threaded engine is too slow.
 
-The BTOR2 model encodes the automaton directly (one Boolean state register
-per summary cell, `init`/`next` per Kind2's `start`/`pre`, `bad` = the
-"nonempty prefix accepted" condition) — there's no `valid`/`start`/`last`
+The BTOR2 model prefers a compact encoding: it first explores the
+automaton's *actually reachable* states (breadth-first, up to
+`--btor2-max-states`) and, if that exploration completes, minimizes the
+resulting DFA (`BooleanAutomaton.minimize`, exact Moore-style partition
+refinement — `reachable`'s own dedup is exact structural equality only, so
+this routinely merges away a further 30-95% of the states on real
+specifications) before emitting a single `ceil(log2(stateCount))`-bit state
+register with a `next`-state lookup — its size tracks the real *minimized*
+reachable-state count, not the per-state Boolean-summary support size. If
+exploration is truncated instead (more
+reachable states than `--btor2-max-states`), it falls back to the older
+direct encoding (one Boolean state register per summary cell, `init`/`next`
+per Kind2's `start`/`pre`). Either way there's no `valid`/`start`/`last`
 input because BTOR2's `init`/`next` already mean "reset once at step 0,
-consume one symbol every step". The empty-word case doesn't get a second
-`bad` line: unlike Kind2 (which still asks the solver to reconfirm it), it's
-already a compile-time constant, so `--run-ric3`'s summary reports it
-directly without invoking rIC3 for it.
+consume one symbol every step", and `bad` = the "nonempty prefix accepted"
+condition. The empty-word case doesn't get a second `bad` line: unlike
+Kind2 (which still asks the solver to reconfirm it), it's already a
+compile-time constant, so `--run-ric3`'s summary reports it directly
+without invoking rIC3 for it.
 
 ```sh
 java -jar $JAR examples/brasp/last_a.brasp --run-ric3
@@ -106,6 +118,94 @@ java -jar $JAR --run-ric3 --kind2-subset examples/brasp/all_words.brasp examples
 java -jar $JAR --run-ric3 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
 java -jar $JAR examples/brasp/last_a.brasp --btor2 > model.btor2
 /Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
+```
+
+### Native backend (`--run-native`)
+
+`--run-native` answers the same plain-safety/subset/equivalence question as
+`--run-ric3`/`--run-abc`, but entirely in-process: it runs
+`BooleanAutomaton.reachable` directly and checks whether any accepting
+state is reachable, with no BTOR2/AIGER model and no external solver at
+all. It exists because, for some formula families, the *smallest correct*
+BTOR2/AIGER model this backend can build (the compact reachable-DFA
+encoding above) doesn't actually help an external IC3/PDR solver: a
+minimized DFA's transition table, bit-blasted, is a lookup with no
+exploitable structure, so rIC3 can end up *slower* on it than on the
+naive per-state encoding, or even crash parsing a large enough table.
+Skipping the encoding step altogether and asking `reachable` the question
+directly avoids both problems — it costs exactly the BFS exploration this
+backend was already going to do internally, no more.
+
+`--native-max-states N` (default 4096, same default as
+`--btor2-max-states`) caps the exploration; hitting it reports `UNKNOWN`
+rather than guessing. Unlike `--btor2`/`--aiger`, there is no non-`--run-`
+form — this backend only ever answers the question, it never emits a
+model — and no raw-output mode, since there is no external tool's stdout
+to show. The empty-word case is reported the same "compile-time constant"
+way as the other backends'.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-native
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native --native-max-states 2000000
+```
+
+### Direct/non-determinized backend (`--direct`, `--run-direct`)
+
+`--btor2`/`--aiger`/`--run-native` all build on `BooleanAutomaton`, which
+*determinizes* the PVWAA first (a Miyano-Hayashi-style subset construction
+over Boolean-summary functions) before emitting hardware or exploring
+reachability. For a handful of `two_var` formula families
+(`same_letter_before`, `since_same_letter`) that determinization step
+itself is exponential in the alphabet size — `checkSupportSize` already
+rejects sigma=15+ outright, and `--run-native`'s own reachable-state
+enumeration hits the same wall a bit later, just as expensively.
+
+`--direct`/`--run-direct` skip determinization entirely: they encode the
+*forward PVWAA* (the alternating automaton `Pvwaa.fromFuture2ltl` produces,
+before `BooleanAutomaton` ever touches it) straight to BTOR2, one Boolean
+register per PVWAA state — the same trick the string solver
+[Sloth](https://github.com/uuverifiers/sloth) uses for its own alternating
+automata (`Carry`/`Leave` references become a freshly *guessed* Boolean
+input, validated one step later by requiring the state's own transition
+formula to hold — exactly a model checker's job, no subset construction
+needed). Sloth's automata have no second ("pebble") position, though, so
+resolving `Goto` — this project's own addition, needed for the two-variable
+`f@i`/`f@j` formulas `Pvwaa` compiles — is this backend's own contribution:
+it resolves against the pebble's *original* anchor symbol, frozen the
+moment the referencing state was first activated, rather than becoming
+another guess.
+
+That resolution is only implemented (and only checked, by
+`DirectPvwaa.checkGotoTargetsAreSimple`, before ever emitting anything) for
+goto-targets that are themselves symbol-constant, with no `Carry`/`Leave`
+of their own — true for every `Once`/`Hist`/`Yst`/`Since`-over-symbol-atoms
+formula this project's own generators produce, but not for a formula with
+one `Until` nested inside another `Until`'s operand (e.g. `at_least_two_a`'s
+`Hist`-based construction) — those still need `--btor2`/`--aiger`.
+
+Where it applies, this is dramatically smaller and faster than every other
+backend on the same input: `same_letter_before` at sigma=16 fails outright
+on every other backend (`checkSupportSize`) or times out (`--run-native`,
+`--run-ric3`); `--run-direct` solves it in under a second, and scales to
+sigma=256 in well under a minute.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-direct
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --run-direct
+```
+
+`--direct-aiger`/`--run-direct-abc` are the AIGER/ABC-backed siblings of
+`--direct`/`--run-direct` (same construction, same
+`checkGotoTargetsAreSimple` scope check, just 2-input AND gates and a
+bit-blasted `symbol` input instead of BTOR2's typed ops — the same
+ABC-needs-power-of-two-alphabets limitation `--aiger` already has). Worth
+reaching for even when `--run-direct` already works: measured on the same
+circuit, ABC's `pdr` is consistently 2-3x faster than rIC3's `ic3` on this
+family, and the gap grows with sigma.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-direct-abc
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --run-direct-abc
 ```
 
 ### ABC backend (`--aiger`, `--run-abc`)
@@ -119,19 +219,33 @@ backend*).
 | Flag | Effect |
 | --- | --- |
 | `--aiger` | print the binary AIGER model instead of the plain automaton |
+| `--aiger-max-states N` | reachable-state cap for the compact DFA encoding below (default 4096) |
 | `--run-abc` | run ABC's `pdr` on it and print a summary (implies `--aiger`) |
 | `--abc-bin PATH` | ABC executable (default `../abc/abc`, sibling to this repo) |
 | `--abc-raw` | print ABC's raw stdout instead of the summary |
 
-The AIGER model reuses the exact same encoding `Btor2` does (one Boolean
-latch per summary cell, `bad` = "nonempty prefix accepted"), but every latch
-is canonicalized to physically reset to 0 — the standard XOR-with-init
-trick — because this build's binary AIGER reader only supports that
-(pre-1.9, no explicit-reset-field) latch format. ABC's `&read` (its other,
-ASCII-capable AIGER reader) was tried first and rejected: it silently
-treats every latch as uninitialized regardless of what the file declares,
-giving wrong verdicts rather than an error, so `Abc.run` always goes through
-the classic `read_aiger` + `pdr` pipeline instead.
+The AIGER model prefers the same compact, minimized encoding `Btor2` does
+(see above): it first explores the automaton's *actually reachable* states
+(up to `--aiger-max-states`) and, if that exploration completes, minimizes
+the DFA before emitting `ceil(log2(stateCount))` latches encoding the
+current state in binary, with a next-state lookup bit-blasted from
+`dfa.transitions` — its size tracks the real *minimized* reachable-state
+count, not the per-state Boolean-summary support size.
+If exploration is truncated instead, it falls back to the older direct
+encoding (one Boolean latch per summary cell, `bad` = "nonempty prefix
+accepted"). Either way every latch is canonicalized to physically reset to
+0 — the standard XOR-with-init trick for the summary-cell encoding, and for
+free for the DFA encoding since its state `0` is always the initial state —
+because this build's binary AIGER reader only supports that (pre-1.9, no
+explicit-reset-field) latch format. ABC's `&read` (its other, ASCII-capable
+AIGER reader) was tried first and rejected: it silently treats every latch
+as uninitialized regardless of what the file declares, giving wrong
+verdicts rather than an error, so `Abc.run` always goes through the classic
+`read_aiger` + `pdr` pipeline instead.
+
+Only power-of-two alphabets are supported either way (see `--btor2`'s
+`constraint` line above — AIGER has no equivalent way to express a
+non-power-of-two symbol range).
 
 ```sh
 java -jar $JAR examples/brasp/last_a.brasp --run-abc

@@ -1,0 +1,39 @@
+logic past-strict
+alphabet a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~  
+
+f_0 := sym(a)@i
+f_1 := sym(b)@i
+f_2 := sym(c)@i
+f_3 := sym(d)@i
+f_4 := sym(e)@i
+f_5 := sym(f)@i
+f_6 := sym(g)@i
+f_7 := sym(h)@i
+f_8 := sym(i)@i
+f_9 := sym(j)@i
+f_10 := sym(k)@i
+f_11 := sym(l)@i
+f_12 := sym(m)@i
+f_13 := sym(n)@i
+f_14 := sym(o)@i
+f_15 := sym(p)@i
+f_16 := sym(q)@i
+f_17 := sym(r)@i
+f_18 := sym(s)@i
+f_19 := sym(t)@i
+f_20 := sym(u)@i
+f_21 := sym(v)@i
+f_22 := sym(w)@i
+f_23 := sym(x)@i
+f_24 := sym(y)@i
+f_25 := sym(z)@i
+f_26 := sym({)@i
+f_27 := sym(|)@i
+f_28 := sym(})@i
+f_29 := sym(~)@i
+f_30 := sym()@i
+f_31 := sym()@i
+f_32 := Y(!((((((((((((((((((((((((((((((((!((f_0@i & f_0@j)) & !((f_1@i & f_1@j))) & !((f_2@i & f_2@j))) & !((f_3@i & f_3@j))) & !((f_4@i & f_4@j))) & !((f_5@i & f_5@j))) & !((f_6@i & f_6@j))) & !((f_7@i & f_7@j))) & !((f_8@i & f_8@j))) & !((f_9@i & f_9@j))) & !((f_10@i & f_10@j))) & !((f_11@i & f_11@j))) & !((f_12@i & f_12@j))) & !((f_13@i & f_13@j))) & !((f_14@i & f_14@j))) & !((f_15@i & f_15@j))) & !((f_16@i & f_16@j))) & !((f_17@i & f_17@j))) & !((f_18@i & f_18@j))) & !((f_19@i & f_19@j))) & !((f_20@i & f_20@j))) & !((f_21@i & f_21@j))) & !((f_22@i & f_22@j))) & !((f_23@i & f_23@j))) & !((f_24@i & f_24@j))) & !((f_25@i & f_25@j))) & !((f_26@i & f_26@j))) & !((f_27@i & f_27@j))) & !((f_28@i & f_28@j))) & !((f_29@i & f_29@j))) & !((f_30@i & f_30@j))) & !((f_31@i & f_31@j)))))
+
+output := f_32@i
+evaluate at i = |w| (the final input position)

@@ -20,12 +20,15 @@ package brasp
   * being irrelevant to any single state.
   */
 
-/** Per-state Boolean summary: `table(state)` is a total truth table over
-  * `ReverseBooleanAutomaton.support(state)`, indexed by the binary encoding
-  * of a local abstraction (MSB-first, matching `cartesianBooleans`'s
-  * enumeration order — see `BooleanAutomaton.bitsToIndex`).
+/** Per-state Boolean summary: `table(state)` is `state`'s current summary
+  * function, represented as a node in `ReverseBooleanAutomaton.bddManager`'s
+  * shared ROBDD (see `Bdd.scala`) rather than an explicit truth table —
+  * `state`'s function is defined over (a subset of) the *global*
+  * `gotoSupport` variables, not a per-state-local index space, which is
+  * exactly what lets `transition`'s `Leave` case below reuse another
+  * state's node as-is.
   */
-final case class BooleanSummary(table: Map[String, Vector[Boolean]])
+final case class BooleanSummary(table: Map[String, Bdd.Node])
 
 /** A deterministic Boolean automaton that reads the original language.
   *
@@ -34,18 +37,24 @@ final case class BooleanSummary(table: Map[String, Vector[Boolean]])
   * original word. It materializes one Boolean-summary state at a time.
   *
   * `gotoSupport` is the automaton-wide set of every state ever reached by a
-  * `goto` transition (rank order); `support(state)` is the subsequence of
-  * `gotoSupport` that `state`'s own summary function actually depends on.
-  * `supportIndex(state)` is `support(state).zipWithIndex.toMap`, precomputed
-  * once so every `goto`/`leave` bit lookup is an O(1) map read instead of an
-  * O(|support(state)|) `List.indexOf` scan repeated across `2^|support|`
-  * abstractions and every BFS step of `reachable`/`accepts`.
+  * `goto` transition (rank order) — also `bddManager`'s fixed variable
+  * order. `support(state)` is the subsequence of `gotoSupport` that
+  * `state`'s own summary function *syntactically* depends on (via its
+  * `goto`/`leave` references); `supportIndex(state)` is
+  * `support(state).zipWithIndex.toMap`. Both are kept only for the
+  * legacy per-backend (`Lustre`/`Kind2`/`Btor2`/`Aiger`) explicit-table
+  * encoders, which still enumerate `2^|support(state)|` abstractions
+  * themselves — `BooleanAutomaton`'s own `diagonal`/`transition`/
+  * `reachable`/`accepts` no longer need either field, since a BDD node
+  * already only ever tests the variables it actually (semantically)
+  * depends on.
   */
 final case class ReverseBooleanAutomaton(
     source: ForwardPVWAA,
     gotoSupport: List[String],
     support: Map[String, List[String]],
     supportIndex: Map[String, Map[String, Int]],
+    bddManager: Bdd.Manager,
     initial: BooleanSummary,
 )
 
@@ -68,32 +77,6 @@ final case class ReachableDfa(
 object BooleanAutomaton:
   import JsonValue.*
   import scala.collection.immutable.VectorMap
-
-  // `transition` calls `cartesianBooleans(support(state).length)` fresh for
-  // every state on every call — and `transition` itself runs once per
-  // step of `accepts`/`reachable`'s BFS (up to `maxStates x alphabet`
-  // times). Without caching, a state with a support of even ~20 turns
-  // into rebuilding a multi-hundred-thousand-element list from scratch on
-  // every single one of those calls; `n` is the only input, so the result
-  // is safe to memoize globally, once, across every automaton. Each
-  // abstraction is a `Vector`, not a `List`: `evaluate` (below) indexes
-  // into it once per `goto`/`leave` atom per abstraction, and `List(i)` is
-  // itself an O(i) scan — the exact same trap `supportIndex` exists to
-  // avoid one level up.
-  private val cartesianCache = scala.collection.mutable.HashMap.empty[Int, List[Vector[Boolean]]]
-
-  private def cartesianBooleans(n: Int): List[Vector[Boolean]] =
-    cartesianCache.getOrElseUpdate(
-      n,
-      if n == 0 then List(Vector.empty) else for first <- List(false, true); rest <- cartesianBooleans(n - 1) yield first +: rest,
-    )
-
-  /** Binary-encode a local abstraction into a table index, MSB-first — the
-    * same weighting `cartesianBooleans`'s enumeration order and every
-    * backend's `mux`/`ite` selector tree already assume.
-    */
-  private def bitsToIndex(bits: List[Boolean]): Int =
-    bits.foldLeft(0)((acc, bit) => (acc << 1) | (if bit then 1 else 0))
 
   private def gotoSupportOf(automaton: ForwardPVWAA): List[String] =
     var found = Set.empty[String]
@@ -147,47 +130,103 @@ object BooleanAutomaton:
           changed = true
     automaton.states.map(state => state -> gotoSupport.filter(supportSets(state))).toMap
 
-  /** Every state's local Boolean-summary table has `2^support(state).length`
-    * entries (`BooleanAutomaton.fromForwardPvwaa`'s `Vector.fill`,
-    * mirrored by every backend's own per-state table/mux construction).
-    * Beyond a couple dozen dependencies that's already tens of millions of
-    * entries — impractical to materialize — and beyond 31 it silently
-    * overflows `Int`'s `1 << n` (wrapping, or going negative), corrupting
-    * the table size instead of just being slow. Reject early with a clear
+  /** Every state's local Boolean-summary table would have
+    * `2^support(state).length` entries under the *explicit* per-state
+    * table/mux construction every backend (`Lustre`/`Kind2`/`Btor2`/
+    * `Aiger`) still builds for hardware/Lustre output. Beyond a couple
+    * dozen dependencies that's already tens of millions of entries —
+    * impractical to materialize — and beyond 31 it silently overflows
+    * `Int`'s `1 << n` (wrapping, or going negative), corrupting the table
+    * size instead of just being slow. Those backends call this explicitly,
+    * before doing any of that expensive work, to reject early with a clear
     * message rather than let either failure mode surface as a confusing
-    * crash or hang deep in `diagonal`/`transition`.
+    * crash or hang.
+    *
+    * `BooleanAutomaton`'s own `diagonal`/`transition`/`reachable`/`accepts`
+    * do *not* call this — they build each state's summary as a
+    * (hash-consed, reduction-collapsed) `Bdd.Node` instead of an explicit
+    * table, so their cost tracks the function's actual complexity, not the
+    * syntactic dependency count this checks. `Bdd.Manager`'s own
+    * `maxNodes` cap is their equivalent safety valve.
     */
   private val maxLocalSupport = 24
 
-  private def checkSupportSize(support: Map[String, List[String]]): Unit =
-    for (state, deps) <- support if deps.length > maxLocalSupport do
+  /** Even when no single state's local support exceeds `maxLocalSupport`,
+    * the *sum* across states (`totalCells`, i.e. `N` in
+    * `docs/boolean-automaton-construction.tex`) can still be large enough
+    * that materializing every cell's `alphabet.length`-way symbol case
+    * (one `transitionFormula` evaluation per `(cell, symbol)` pair, in
+    * `Lustre`/`Btor2`/`Aiger`'s `symbolCase`) is impractical — measured on
+    * an `ltl_examples/OrderedSequence` benchmark with 130 states none of
+    * which individually exceeded a local support of 16, `N x
+    * alphabetSize` reached ~21 million cell-symbol evaluations, enough to
+    * exhaust a 6 GB heap outright (not a slow run — an actual
+    * `OutOfMemoryError`), well before any single state came close to
+    * `maxLocalSupport`. This cap catches that aggregate case with a
+    * clean, immediate error instead of a crash that can arrive minutes
+    * into construction.
+    *
+    * The bound has to protect the *consumer*, not just this process's own
+    * heap: `two_var/monotone_past/sigma=16` (34 states, local support up
+    * to 15 — nowhere near `maxLocalSupport`) reaches `totalWork` ≈
+    * 1,049,088, comfortably under the old 2,000,000 cap, so `checkSupportSize`
+    * let it through. Construction itself doesn't outright OOM (it finishes
+    * given an 8 GB heap, emitting a ~1.07M-line AIGER model), but with the
+    * JVM's *default* heap it takes ~116s before an `OutOfMemoryError`, and
+    * the equivalent BTOR2 model is bad enough that rIC3 — a separate
+    * process — crashes reading it with a native stack overflow after
+    * ~150s. Neither failure is this check's job to let happen: a
+    * borderline-permitted encoding that only "works" with a heap most
+    * environments don't have, and that breaks a downstream solver outright,
+    * is exactly what this cap exists to reject up front instead. The very
+    * next alphabet size (`sigma=17`, `totalWork` ≈ 2,228,802) already falls
+    * back cleanly to the bounded `reachable`-DFA search and finishes in
+    * under a second — proof this formula family was never actually hard,
+    * just wrongly routed at `sigma=16`. Lowered accordingly, with headroom
+    * below the largest `sigma` that measured cheap (`sigma=15`, `totalWork`
+    * ≈ 491,970).
+    */
+  private val maxTotalWork = BigInt(500_000)
+
+  def checkSupportSize(automaton: ReverseBooleanAutomaton): Unit =
+    for (state, deps) <- automaton.support if deps.length > maxLocalSupport do
       throw PVWAAError(
         s"state '$state' depends on ${deps.length} other goto-support states, exceeding this backend's per-state limit of $maxLocalSupport " +
           s"(its Boolean-summary table would need 2^${deps.length} entries) — the automaton's goto/leave dependency structure is too tangled for this encoding"
+      )
+    val cells = totalCells(automaton)
+    val totalWork = cells * automaton.source.alphabet.length
+    if totalWork > maxTotalWork then
+      throw PVWAAError(
+        s"this automaton's explicit encoding would need $cells Boolean-summary cells x ${automaton.source.alphabet.length} alphabet symbols = $totalWork cell-symbol evaluations, " +
+          s"exceeding this backend's aggregate limit of $maxTotalWork — even though no single state's local support exceeds $maxLocalSupport, too many individually-tangled states combine into an impractical total for this encoding"
       )
 
   /** Construct the initial Boolean summary for the reversed automaton. */
   def fromForwardPvwaa(automaton: ForwardPVWAA): ReverseBooleanAutomaton =
     val gotoSupport = gotoSupportOf(automaton)
     val support = supportOf(automaton, gotoSupport)
-    checkSupportSize(support)
     val supportIndex = support.view.mapValues(_.zipWithIndex.toMap).toMap
+    val bddManager = Bdd.Manager(gotoSupport)
+    // Every entry of the old explicit table was the same constant
+    // (`Vector.fill(1 << n)(finalStates.contains(state))`) — the initial
+    // summary doesn't actually depend on any goto-support bit yet, so it's
+    // exactly the corresponding BDD terminal, not a variable-testing node.
     val initial = BooleanSummary(
-      automaton.states.map { state =>
-        state -> Vector.fill(1 << support(state).length)(automaton.finalStates.contains(state))
-      }.toMap
+      automaton.states.map(state => state -> (if automaton.finalStates.contains(state) then Bdd.True else Bdd.False)).toMap
     )
-    ReverseBooleanAutomaton(automaton, gotoSupport, support, supportIndex, initial)
+    ReverseBooleanAutomaton(automaton, gotoSupport, support, supportIndex, bddManager, initial)
 
   /** Solve `V(q) = S(q, V|G)` bottom-up along the very-weak order. */
   def diagonal(automaton: ReverseBooleanAutomaton, summary: BooleanSummary): Map[String, Boolean] =
     val ordered = automaton.source.states.sortBy(state => (automaton.source.rank(state), state))
     var result = Map.empty[String, Boolean]
     for state <- ordered do
-      // By very weakness, this row can inspect only strictly lower-ranked
-      // goto states. Values for the remaining support are don't-cares.
-      val bits = automaton.support(state).map(goto => result.getOrElse(goto, false))
-      result = result.updated(state, summary.table(state)(bitsToIndex(bits)))
+      // By very weakness, this evaluation can inspect only strictly
+      // lower-ranked goto states. Values for the remaining support are
+      // don't-cares (`eval` defaults to `false`, same as the old lookup).
+      val value = automaton.bddManager.eval(summary.table(state), goto => result.getOrElse(goto, false))
+      result = result.updated(state, value)
     result
 
   /** Consume one original-language symbol and return the next summary. */
@@ -195,28 +234,27 @@ object BooleanAutomaton:
     if !automaton.source.alphabet.contains(symbol) then
       throw PVWAAError(s"symbol outside automaton alphabet: '$symbol'")
     val priorDiagonal = diagonal(automaton, summary)
+    val mgr = automaton.bddManager
 
-    // `ownerAbstraction` is indexed by `automaton.support(owner)` — the
-    // formula being evaluated always belongs to `owner`. A `leave`/`goto`
-    // atom's target is always in `owner`'s support by construction of
-    // `supportOf`, so the `automaton.supportIndex(owner)` lookups below
-    // never miss.
-    def evaluate(owner: String, ownerIndex: Map[String, Int], ownerAbstraction: Vector[Boolean], formula: PositiveFormula): Boolean = formula match
-      case PositiveFormula.PositiveConstant(value) => value
-      case PositiveFormula.PositiveAnd(operands)    => operands.forall(o => evaluate(owner, ownerIndex, ownerAbstraction, o))
-      case PositiveFormula.PositiveOr(operands)     => operands.exists(o => evaluate(owner, ownerIndex, ownerAbstraction, o))
+    // Builds `formula`'s BDD directly over the *global* goto-support
+    // variables — no per-owner local abstraction/index bookkeeping needed
+    // at all, unlike the old explicit-table `evaluate`: `Goto` is simply
+    // that state's shared BDD variable, and `Leave` simply reuses that
+    // state's already-built `Node` from `summary` unchanged (same manager,
+    // same variable identities, so no projection/remapping is needed).
+    def build(formula: PositiveFormula): Bdd.Node = formula match
+      case PositiveFormula.PositiveConstant(value) => if value then Bdd.True else Bdd.False
+      case PositiveFormula.PositiveAnd(operands)    => mgr.and(operands.map(build))
+      case PositiveFormula.PositiveOr(operands)     => mgr.or(operands.map(build))
       case PositiveFormula.TransitionAtom(state, action) =>
         action match
-          case Action.Carry => priorDiagonal(state)
-          case Action.Leave =>
-            val bits = automaton.support(state).map(g => ownerAbstraction(ownerIndex(g)))
-            summary.table(state)(bitsToIndex(bits))
-          case Action.Goto => ownerAbstraction(ownerIndex(state))
+          case Action.Carry => if priorDiagonal(state) then Bdd.True else Bdd.False
+          case Action.Leave => summary.table(state)
+          case Action.Goto  => mgr.variable(state)
 
     val table = automaton.source.states.map { state =>
       val formula = automaton.source.transitions((state, symbol))
-      val index = automaton.supportIndex(state)
-      state -> cartesianBooleans(automaton.support(state).length).map(abstraction => evaluate(state, index, abstraction, formula)).toVector
+      state -> build(formula)
     }.toMap
     BooleanSummary(table)
 
@@ -232,9 +270,15 @@ object BooleanAutomaton:
   private def totalCells(automaton: ReverseBooleanAutomaton): BigInt =
     automaton.source.states.map(state => BigInt(2).pow(automaton.support(state).length)).sum
 
-  private def maximumStateCount(automaton: ReverseBooleanAutomaton): BigInt =
-    val cells = totalCells(automaton).min(BigInt(Int.MaxValue))
-    BigInt(2).pow(cells.toInt)
+  /** `2^cells` as a *string*, never as a materialized `BigInt` — `cells`
+    * itself can legitimately reach into the millions for the exact formulas
+    * this file's `Bdd`-based rewrite targets, and `BigInt(2).pow(millions)`
+    * would need to actually allocate (and `render`/`toJson` would then have
+    * to decimal-format) a number with proportionally many digits. Printing
+    * the exponent instead is exact, human-readable, and can never be slow.
+    */
+  private def maximumStateCountLabel(automaton: ReverseBooleanAutomaton): String =
+    s"2^${totalCells(automaton)}"
 
   def render(automaton: ReverseBooleanAutomaton): String =
     List(
@@ -242,9 +286,9 @@ object BooleanAutomaton:
       s"PVWAA states: ${automaton.source.states.length}",
       s"goto support: {${automaton.gotoSupport.mkString(", ")}}",
       s"max per-state local support: ${automaton.support.values.map(_.length).maxOption.getOrElse(0)}",
-      s"Boolean-summary cells: ${totalCells(automaton)}",
-      s"maximum Boolean-summary states: ${maximumStateCount(automaton)}",
-      "transition: Section 9 summary recurrence, evaluated on demand",
+      s"Boolean-summary cells (worst case, pre-BDD-reduction): ${totalCells(automaton)}",
+      s"maximum Boolean-summary states: ${maximumStateCountLabel(automaton)}",
+      "transition: Section 9 summary recurrence, evaluated on demand via a shared ROBDD (Bdd.scala)",
     ).mkString("\n")
 
   /** Explore the automaton's *reachable* states breadth-first from
@@ -271,10 +315,20 @@ object BooleanAutomaton:
 
     val initial = idFor(automaton.initial)
     queue += automaton.initial
-    while queue.nonEmpty do
+    // Stop as soon as `truncated` is set, both across states and within a
+    // single state's own symbols: a truncated `transitions` table is
+    // already documented as unusable as-is (`generateSafetyFromDfa`/
+    // `minimize` both reject it outright), so continuing to explore more
+    // of it past that point is pure wasted `transition` calls — e.g. once
+    // a large-alphabet automaton has clearly blown past `maxStates` on its
+    // very first state, there's no reason to keep computing that state's
+    // remaining `alphabet.length` transitions one by one.
+    while queue.nonEmpty && !truncated do
       val current = queue.dequeue()
       val fromId = idFor(current)
-      for symbol <- automaton.source.alphabet do
+      val symbols = automaton.source.alphabet.iterator
+      while symbols.hasNext && !truncated do
+        val symbol = symbols.next()
         val next = transition(automaton, current, symbol)
         val isNewState = !ids.contains(next)
         if isNewState && ids.size >= maxStates then truncated = true
@@ -282,8 +336,113 @@ object BooleanAutomaton:
           transitions((fromId, symbol)) = idFor(next)
           if isNewState then queue += next
 
-    val accepting = ids.collect { case (summary, id) if diagonal(automaton, summary)(automaton.source.initialState) => id }.toSet
+    val accepting =
+      if truncated then Set.empty[Int]
+      else ids.collect { case (summary, id) if diagonal(automaton, summary)(automaton.source.initialState) => id }.toSet
     ReachableDfa(ids.size, VectorMap.from(transitions), accepting, initial, truncated)
+
+  /** Shortest nonempty word (if any) that reaches an accepting state of
+    * `dfa` from its initial state — a BFS over the already-materialized
+    * `transitions` table, entirely separate from `reachable`'s own BFS.
+    * This is what lets `--run-native` report a concrete counterexample
+    * without needing an external solver's witness extraction: `dfa` is
+    * small and explicit by the time this runs, so a second linear BFS over
+    * it is negligible next to the cost of building it in the first place.
+    * Only meaningful when `dfa.initial` itself isn't accepting (that case —
+    * the empty word — is instead reported separately, the same
+    * "compile-time constant" way every other backend already does).
+    */
+  def witness(dfa: ReachableDfa, alphabet: List[String]): Option[List[String]] =
+    val parent = scala.collection.mutable.HashMap.empty[Int, (Int, String)]
+    val visited = scala.collection.mutable.Set(dfa.initial)
+    val queue = scala.collection.mutable.Queue(dfa.initial)
+    var target: Option[Int] = None // the empty word is reported separately by the caller, not here
+    while queue.nonEmpty && target.isEmpty do
+      val state = queue.dequeue()
+      val symbols = alphabet.iterator
+      while symbols.hasNext && target.isEmpty do
+        val symbol = symbols.next()
+        dfa.transitions.get((state, symbol)).foreach { next =>
+          if !visited.contains(next) then
+            visited += next
+            parent(next) = (state, symbol)
+            if dfa.accepting.contains(next) then target = Some(next)
+            else queue += next
+        }
+    target.map { goal =>
+      val path = scala.collection.mutable.ArrayBuffer.empty[String]
+      var current = goal
+      while current != dfa.initial do
+        val (previous, symbol) = parent(current)
+        path += symbol
+        current = previous
+      path.reverse.toList
+    }
+
+  /** Merge every distinct label in `labels` to a small int, assigned in
+    * first-occurrence order — the "give each partition block a stable id"
+    * step `minimize` needs twice (once for the initial accepting/rejecting
+    * split, once per refinement round).
+    */
+  private def renumber[A](labels: IndexedSeq[A]): (IndexedSeq[Int], Int) =
+    val ids = scala.collection.mutable.LinkedHashMap.empty[A, Int]
+    val assigned = labels.map(label => ids.getOrElseUpdate(label, ids.size))
+    (assigned, ids.size)
+
+  /** Minimize `dfa` via Moore's partition-refinement algorithm: merge every
+    * pair of states that accept exactly the same set of future suffixes
+    * into one. `dfa` must not be `truncated` — a partial transition table
+    * can't be soundly minimized, since a missing transition could hide a
+    * real distinction between two states that only manifests past the cap.
+    *
+    * This targets the same goal as an antichain/simulation-based state
+    * reduction during exploration (Abdulla et al., "When Simulation Meets
+    * Antichains", TACAS'10) — shrink a reachable state space down to only
+    * the states that matter — but takes the exact route: standard
+    * bisimulation-equivalence minimization on an already-materialized DFA,
+    * rather than an on-the-fly simulation preorder while exploring it. It's
+    * strictly weaker (it can't prune what `reachable` never finishes
+    * exploring), but its soundness is the textbook DFA-minimization
+    * argument rather than a new preorder that would need its own proof.
+    */
+  def minimize(dfa: ReachableDfa, alphabet: List[String]): ReachableDfa =
+    if dfa.truncated then
+      throw PVWAAError(
+        "cannot minimize a truncated reachable-state exploration — a missing transition could hide a real distinction between two states"
+      )
+
+    // Every round below assigns block ids in the order this sequence is
+    // walked (first-occurrence order, via `renumber`) — putting `initial`
+    // first therefore guarantees its block is *always* id 0, in every
+    // round, preserving `ReachableDfa`'s own documented invariant
+    // ("initial is always 0") in the output. That invariant isn't optional
+    // bookkeeping: `Aiger.generateSafetyFromDfa` never reads `.initial` at
+    // all — it relies on the physical all-zero latch state already being
+    // the initial one — so a minimizer that renumbered some other block to
+    // 0 would silently reset the emitted circuit to the wrong state.
+    val order: Vector[Int] = dfa.initial +: (0 until dfa.stateCount).filterNot(_ == dfa.initial).toVector
+    def renumberByState(labelOf: Int => Any): (Map[Int, Int], Int) =
+      val (assigned, count) = renumber(order.map(labelOf))
+      (order.zip(assigned).toMap, count)
+
+    var (blockOf, blockCount) = renumberByState(state => dfa.accepting.contains(state))
+    var changed = true
+    while changed do
+      val (nextBlockOf, nextBlockCount) = renumberByState(state => (blockOf(state), alphabet.map(symbol => blockOf(dfa.transitions((state, symbol))))))
+      changed = nextBlockCount != blockCount
+      blockOf = nextBlockOf
+      blockCount = nextBlockCount
+
+    // Any one original state per block stands in for the whole block: by
+    // construction every state in a block agrees on both acceptance and
+    // where each symbol leads (as a block), so it doesn't matter which.
+    val representative = (0 until dfa.stateCount).foldLeft(Map.empty[Int, Int])((chosen, state) => chosen.updatedWith(blockOf(state))(_.orElse(Some(state))))
+    val newTransitions = for
+      block <- 0 until blockCount
+      symbol <- alphabet
+    yield (block, symbol) -> blockOf(dfa.transitions((representative(block), symbol)))
+    val newAccepting = (0 until blockCount).filter(block => dfa.accepting.contains(representative(block))).toSet
+    ReachableDfa(blockCount, VectorMap.from(newTransitions), newAccepting, blockOf(dfa.initial), truncated = false)
 
   /** Graphviz DOT rendering of `reachable(automaton, maxStates)`. */
   def toDot(automaton: ReverseBooleanAutomaton, name: String = "boolean_automaton", maxStates: Int = 512): String =
@@ -320,7 +479,11 @@ object BooleanAutomaton:
         "goto_support" -> JArr(automaton.gotoSupport.map(str).toVector),
         "support" -> JObj(automaton.source.states.map(state => state -> JArr(automaton.support(state).map(str).toVector)).toVector),
         "cell_count" -> JsonValue.bigInt(totalCells(automaton)),
-        "maximum_state_count" -> JsonValue.bigInt(maximumStateCount(automaton)),
-        "initial_summary" -> JObj(automaton.source.states.map(state => state -> JArr(automaton.initial.table(state).map(bool).toVector)).toVector),
+        "maximum_state_count" -> str(maximumStateCountLabel(automaton)),
+        // The initial summary is always a constant per state (independent
+        // of goto-support, since nothing has been consumed yet) — this is
+        // that constant, not a full (and, pre-rewrite, needlessly `2^n`-long)
+        // per-abstraction table.
+        "initial_summary" -> JObj(automaton.source.states.map(state => state -> bool(automaton.source.finalStates.contains(state))).toVector),
       )
     )
