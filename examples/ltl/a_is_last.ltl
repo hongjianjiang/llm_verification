@@ -1,7 +1,0 @@
-logic past-strict
-alphabet a b
-
-is_a := sym(a)@i
-
-output := is_a@i
-evaluate at i = |w| (the final input position)

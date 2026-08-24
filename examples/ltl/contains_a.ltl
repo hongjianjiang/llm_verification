@@ -1,9 +1,0 @@
-logic past-strict
-alphabet a b
-
-is_a := sym(a)@i
-a_before := (!(is_a@j)) S ((is_a@j & true))
-contains_a := (is_a@i | a_before@i)
-
-output := contains_a@i
-evaluate at i = |w| (the final input position)
