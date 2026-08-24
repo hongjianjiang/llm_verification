@@ -1,14 +1,13 @@
 package brasp
 
-import java.io.ByteArrayOutputStream
 import scala.collection.mutable
 
 /** A BTOR2 backend that skips `BooleanAutomaton`'s determinization
   * entirely: it encodes the forward PVWAA (the alternating automaton
   * `Pvwaa.fromFuture2ltl` produces) directly, one Boolean state register
-  * per PVWAA state, instead of one register per Boolean-summary cell
-  * (`Btor2.generateSafety`) or per minimized-DFA state
-  * (`Btor2.generateSafetyFromDfa`).
+  * per PVWAA state, instead of one register per Boolean-summary cell or
+  * per minimized-DFA state (the determinized-path encodings elsewhere in
+  * this project).
   *
   * The construction follows the string solver Sloth's own AFA-to-AIGER
   * translation (`strsolver.Emptiness.AFA2AAG`, uuverifiers/sloth): each
@@ -18,22 +17,39 @@ import scala.collection.mutable
   * must hold" — exactly a hardware model checker's own job, no explicit
   * subset-construction needed. Sloth's automata have no second ("pebble")
   * position, though, so that part is this project's own addition: a
-  * `Goto` reference resolves against the *pebble's original anchor
-  * symbol* (frozen the moment the referencing state was first activated,
-  * not recomputed per step) rather than becoming another guess.
+  * `Goto` reference resolves against the *referencing state's own pebble*
+  * (`run(state, pebble, pebble)` in `Pvwaa.satisfy`) rather than becoming
+  * another guess. Since `Goto` never moves the pebble, and every state's
+  * own pebble is wherever its `active`/`guess` chain last (re)armed it,
+  * this needs one small per-state register (`generateSafety`'s own
+  * `rootOf`/`activePrevOf`, see the comment above `needsRoot` there for
+  * the full reasoning) capturing the symbol seen exactly when that
+  * happened — not just the *word's* first symbol, which only coincides
+  * with every state's own pebble as long as no `Goto`-containing state is
+  * ever itself `Carry`'d into from somewhere else (true for `same_letter_
+  * before`/`since_same_letter`, false the moment one `rightmost(...)` is
+  * nested inside another's witness operand, e.g. `at_least_two_a`'s
+  * `Hist`-based construction, or a Boolean-combinator goto-source like
+  * `dot_depth`'s `f_3 = f_1 & f_2` that itself later gets `Carry`'d into).
   *
-  * That resolution is only implemented for the case validated against
-  * `Pvwaa.accepts` on every `two_var` family this project's own generator
-  * produces: a goto-target whose own formula is symbol-constant, with no
-  * further `Carry`/`Leave` of its own (`Once`/`Hist`/`Yst`/`Since` over
-  * plain symbol atoms, i.e. no `Until` nested inside another `Until`'s
-  * operand). `checkGotoTargetsAreSimple` rejects anything else up front —
-  * e.g. `at_least_two_a`'s `Hist`-based construction, whose goto-targets
-  * carry their own multi-step `Carry`/`Leave` chains, is deliberately out
-  * of scope here; use `Btor2`/`Aiger` for those.
+  * This is validated against `Pvwaa.accepts` on every `two_var` formula
+  * this project's own generators produce, including formulas with `Until`
+  * nested inside another `Until`'s operand (`at_least_two_a`, the
+  * `dot_depth`/`y_depth` families) — the case this backend used to reject
+  * outright. Soundness there rests on one empirical fact, checked by
+  * `tools.GotoOverlapCheck` rather than proven in general: no state in
+  * this project's automata is ever needed relative to two different,
+  * simultaneously-live pebbles at once (so one root register per state,
+  * not one per still-open "episode", suffices) -- which lines up with
+  * `Pvwaa`'s very-weak rank ordering forcing every `Goto`/`Carry`
+  * reference to strictly decreasing rank, plus a `rightmost` witness
+  * search committing to at most one candidate witness at a time along any
+  * real accepting continuation. If some future formula shape violates
+  * that, `GotoOverlapCheck` is how to find out before trusting this
+  * backend's output on it.
   *
   * Where it applies, this sidesteps two independent blow-ups the other
-  * backends hit on the same `two_var` families: `Btor2.generateSafety`'s
+  * backends hit on the same `two_var` families: the determinized path's
   * `2^|local support|` explicit table (`same_letter_before`/
   * `since_same_letter`, exponential in the alphabet), and
   * `BooleanAutomaton.reachable`'s own joint-state enumeration
@@ -58,44 +74,6 @@ object DirectPvwaa:
   private def symbolWidth(alphabetSize: Int): Int =
     if alphabetSize <= 1 then 1 else 32 - Integer.numberOfLeadingZeros(alphabetSize - 1)
 
-  /** Every `Goto`-referenced state's own transition formula must be built
-    * only from `PositiveConstant`/`PositiveAnd`/`PositiveOr`/`Goto` — no
-    * `Carry`/`Leave` of its own, transitively — see the class doc-comment
-    * for why. Throws `DirectPvwaaError` naming the first offending state
-    * instead of silently building an unsound circuit.
-    */
-  def checkGotoTargetsAreSimple(automaton: ForwardPVWAA): Unit =
-    val gotoTargets = mutable.LinkedHashSet.empty[String]
-    def collectGotoTargets(f: PositiveFormula): Unit = f match
-      case PositiveFormula.PositiveConstant(_)                  => ()
-      case PositiveFormula.PositiveAnd(operands)                => operands.foreach(collectGotoTargets)
-      case PositiveFormula.PositiveOr(operands)                 => operands.foreach(collectGotoTargets)
-      case PositiveFormula.TransitionAtom(target, Action.Goto)  => gotoTargets += target
-      case PositiveFormula.TransitionAtom(_, Action.Carry | Action.Leave) => ()
-    for
-      state <- automaton.states
-      symbol <- automaton.alphabet
-    do collectGotoTargets(automaton.transitions((state, symbol)))
-
-    def isSimple(state: String, seen: Set[String]): Boolean =
-      if seen.contains(state) then true
-      else
-        def check(f: PositiveFormula): Boolean = f match
-          case PositiveFormula.PositiveConstant(_)                             => true
-          case PositiveFormula.PositiveAnd(operands)                           => operands.forall(check)
-          case PositiveFormula.PositiveOr(operands)                            => operands.forall(check)
-          case PositiveFormula.TransitionAtom(_, Action.Carry | Action.Leave)  => false
-          case PositiveFormula.TransitionAtom(target, Action.Goto)             => isSimple(target, seen + state)
-        automaton.alphabet.forall(symbol => check(automaton.transitions((state, symbol))))
-
-    for target <- gotoTargets do
-      if !isSimple(target, Set.empty) then
-        throw DirectPvwaaError(
-          s"goto-target '$target' has its own Carry/Leave structure (e.g. a Until nested inside another " +
-            "Until's operand, as Hist-based formulas produce) — this backend only supports goto-targets " +
-            "that are themselves symbol-constant formulas; use --btor2/--aiger instead"
-        )
-
   /** Whether the empty word is accepted — a compile-time constant (mirrors
     * `Pvwaa.accepts`'s own `head == length` base case at `length == 0`),
     * computed statically rather than by asking the solver.
@@ -106,14 +84,14 @@ object DirectPvwaa:
   /** Emit a BTOR2 model proving the automaton's bad language is
     * unreachable: `bad` is reachable iff some nonempty word is accepted.
     * The `symbol` input is declared first (BTOR2 input index 0), matching
-    * what `Ric3.summarize`'s witness decoder already expects — this
-    * backend's extra per-state "guess" inputs come after it and are
-    * simply ignored by that decoder, so counterexample words still decode
-    * correctly with no changes there.
+    * rIC3's own counterexample-witness convention (its `@k` frames carry
+    * one value per input, in declaration order) — this backend's extra
+    * per-state "guess" inputs come after it, so reading a witness back out
+    * of rIC3's raw output still means "take the first input's value" with
+    * no extra bookkeeping.
     */
   def generateSafety(automaton: ForwardPVWAA, monitorName: String = "brasp_monitor"): String =
     if automaton.alphabet.isEmpty then throw DirectPvwaaError("this backend requires a non-empty alphabet")
-    checkGotoTargetsAreSimple(automaton)
 
     val b = Builder()
     val states = automaton.states
@@ -145,30 +123,91 @@ object DirectPvwaa:
     val errReg = b.emit(s"state $sortBool err")
     b.emit(s"init $sortBool $errReg $zero")
 
-    // frozen-first-symbol machinery for resolving Goto (see class doc)
+    // still needed below purely to gate `reachCheck` against t=0 (the
+    // empty-word case, handled separately by `emptyWordAccepted`) --
+    // unrelated to Goto resolution now (see `rootOf` below).
     val startedReg = b.emit(s"state $sortBool started")
     b.emit(s"init $sortBool $startedReg $zero")
-    val firstSymbolReg = b.emit(s"state $sortSymbol firstSymbol")
-    b.emit(s"init $sortSymbol $firstSymbolReg ${constIndex(0)}")
-    val effectiveFirstSymbol = b.gate(s"ite $sortSymbol $startedReg $firstSymbolReg $symbolInput")
 
-    def dispatchOnSymbol(state: String, symbolBits: Int, encode: PositiveFormula => Int): Int =
-      alphabet.zipWithIndex.foldRight(zero) { case ((symbol, index), acc) =>
-        val eq = b.gate(s"eq $sortBool $symbolBits ${constIndex(index)}")
-        val transition = encode(automaton.transitions((state, symbol)))
-        b.gate(s"ite $sortBool $eq $transition $acc")
-      }
+    // A `SymbolTest` leaf is `Ltl.symbolMatches(kind, sym, concreteSymbol) !=
+    // dual` for whichever concrete symbol `wire` currently holds — resolved
+    // here as an OR of `eq`s against every alphabet symbol that satisfies
+    // it, mirroring what used to be baked into which `(state, symbol)` map
+    // entry got selected before `ForwardPVWAA.transitions` moved to one
+    // formula per state (see that type's own doc-comment).
+    val alphabetIndex = alphabet.zipWithIndex.toMap
+    def resolveSymbolTest(wire: Int, kind: AtomKind, sym: Option[String], dual: Boolean): Int =
+      val hits = alphabet.filter(candidate => Ltl.symbolMatches(kind, sym, candidate) != dual)
+      orAll(hits.map(candidate => b.gate(s"eq $sortBool $wire ${constIndex(alphabetIndex(candidate))}")))
 
-    def encode(f: PositiveFormula): Int = f match
+    // `Goto q` means `run(q, pebble, pebble)` (`Pvwaa.satisfy`): re-evaluate
+    // q's own transition formula at the *referencing* state's own pebble,
+    // not at the live head. That pebble is wherever the referencing
+    // state's own active/guess chain last (re)armed it -- which is
+    // position 0 only for a state that's never itself `Carry`'d into (the
+    // old global "frozen first symbol" this replaces silently assumed that
+    // of *every* state with a Goto in its formula, which stops holding the
+    // moment one `rightmost(...)` is nested inside another's witness
+    // operand, e.g. `at_least_two_a`'s `Hist`-based construction, or a
+    // Boolean-combinator goto-source like `dot_depth`'s `f_3 = f_1 & f_2`
+    // that itself later gets `Carry`'d into by `f_4`'s witness search).
+    //
+    // So every state whose own formula contains a `Goto` gets a one-shot
+    // "root" register, capturing the symbol seen exactly when *that
+    // state's own* `active` register last flipped 0->1, held until it
+    // flips again -- the old global `started`/`firstSymbol` pair, just per
+    // state instead of once globally. A nested `Goto` chain (a target
+    // whose own formula also `Goto`s further) reuses the *same* root the
+    // whole way down, since `Goto` never changes the pebble -- only
+    // `Carry` does, and that's handled by the target's own root instead.
+    //
+    // A single root register per state (rather than one per still-open
+    // "episode") is only sound if a state's value is never needed
+    // relative to two different, simultaneously-live roots at once --
+    // checked empirically (`tools.GotoOverlapCheck`) against every
+    // `two_var`/`Hist`-based formula in this repo, including the deepest
+    // (`dot_depth__k-24`, 12 alternating Goto/Carry levels): it never
+    // happens, which lines up with `Pvwaa`'s very-weak rank ordering
+    // forcing every `Goto`/`Carry` reference to strictly decreasing rank,
+    // plus a `rightmost` witness search committing to at most one
+    // candidate witness at a time along any real accepting continuation.
+    def containsGoto(f: PositiveFormula): Boolean = f match
+      case PositiveFormula.PositiveConstant(_)                            => false
+      case _: PositiveFormula.SymbolTest                                  => false
+      case PositiveFormula.PositiveAnd(operands)                          => operands.exists(containsGoto)
+      case PositiveFormula.PositiveOr(operands)                           => operands.exists(containsGoto)
+      case PositiveFormula.TransitionAtom(_, Action.Goto)                 => true
+      case PositiveFormula.TransitionAtom(_, Action.Carry | Action.Leave) => false
+    val needsRoot = states.filter(state => containsGoto(automaton.transitions(state)))
+
+    val rootOf = needsRoot.map(state => state -> b.emit(s"state $sortSymbol root_$state")).toMap
+    for state <- needsRoot do b.emit(s"init $sortSymbol ${rootOf(state)} ${constIndex(0)}")
+    val activePrevOf = needsRoot.map(state => state -> b.emit(s"state $sortBool activePrev_$state")).toMap
+    for state <- needsRoot do b.emit(s"init $sortBool ${activePrevOf(state)} $zero")
+
+    def effectiveRootOf(state: String): Int =
+      val justBecameActive = b.gate(s"and $sortBool ${activeOf(state)} ${notGate(activePrevOf(state))}")
+      b.gate(s"ite $sortSymbol $justBecameActive $symbolInput ${rootOf(state)}")
+    val rootSymbolOf = needsRoot.map(state => state -> effectiveRootOf(state)).toMap
+
+    // `currentWire` is what a *direct* `SymbolTest` leaf of the formula
+    // being walked resolves against; `gotoWire` is what it switches to (and
+    // then stays at, through further nested `Goto`s) the moment a `Goto` is
+    // crossed -- see `Pvwaa.satisfy`: a state's own formula dispatches on
+    // `word(head)`, but `run(target, pebble, pebble)` dispatches on
+    // `word(pebble)` from then on.
+    def encodeFor(currentWire: Int, gotoWire: Int)(f: PositiveFormula): Int = f match
       case PositiveFormula.PositiveConstant(value) => boolConst(value)
-      case PositiveFormula.PositiveAnd(operands)   => andAll(operands.map(encode))
-      case PositiveFormula.PositiveOr(operands)    => orAll(operands.map(encode))
+      case PositiveFormula.SymbolTest(kind, sym, dual) => resolveSymbolTest(currentWire, kind, sym, dual)
+      case PositiveFormula.PositiveAnd(operands)   => andAll(operands.map(encodeFor(currentWire, gotoWire)))
+      case PositiveFormula.PositiveOr(operands)    => orAll(operands.map(encodeFor(currentWire, gotoWire)))
       case PositiveFormula.TransitionAtom(state, Action.Goto) =>
-        dispatchOnSymbol(state, effectiveFirstSymbol, encode)
+        encodeFor(gotoWire, gotoWire)(automaton.transitions(state))
       case PositiveFormula.TransitionAtom(state, Action.Carry | Action.Leave) =>
         guessOf(state)
 
-    val obligationOf = states.map(state => state -> dispatchOnSymbol(state, symbolInput, encode)).toMap
+    val obligationOf =
+      states.map(state => state -> encodeFor(symbolInput, rootSymbolOf.getOrElse(state, symbolInput))(automaton.transitions(state))).toMap
 
     val allSatisfied = andAll(states.map(q => orGate(notGate(activeOf(q)), obligationOf(q))))
     val noNewErr = andGate(notGate(errReg), allSatisfied)
@@ -181,14 +220,15 @@ object DirectPvwaa:
     // gated on `started`: at t=0 (before any symbol is consumed) `active`
     // already holds the *initial* configuration, so this would otherwise
     // also fire for the empty word — which is already reported separately
-    // (`emptyWordAccepted`), the same convention `Btor2.generateSafety`
-    // uses (its `bad` is built from `curDiagonal`, inherently post-symbol).
+    // (`emptyWordAccepted`): `bad` here is inherently post-symbol.
     val reachCheck = andGate(startedReg, andGate(notGate(errReg), allActiveAreFinal))
 
     for state <- states do b.emit(s"next $sortBool ${activeOf(state)} ${guessOf(state)}")
     b.emit(s"next $sortBool $errReg ${notGate(noNewErr)}")
     b.emit(s"next $sortBool $startedReg $one")
-    b.emit(s"next $sortSymbol $firstSymbolReg $effectiveFirstSymbol")
+    for state <- needsRoot do
+      b.emit(s"next $sortSymbol ${rootOf(state)} ${rootSymbolOf(state)}")
+      b.emit(s"next $sortBool ${activePrevOf(state)} ${activeOf(state)}")
 
     if alphabetSize < (1 << width) then
       val inRange = b.emit(s"ult $sortBool $symbolInput ${constIndex(alphabetSize)}")
@@ -200,169 +240,3 @@ object DirectPvwaa:
       alphabet.zipWithIndex.map { case (symbol, index) => s"; symbol = $index represents input symbol '$symbol'." } ++
       b.lines.toList :+ "").mkString("\n")
 
-  private final class AigerBuilder:
-    private var nextVar = 1
-    val andGates = mutable.ArrayBuffer.empty[(Int, Int, Int)] // (outputLit, aLit, bLit)
-    def freshVar(): Int =
-      val v = nextVar
-      nextVar += 1
-      v
-    def maxVar: Int = nextVar - 1
-    def lit(v: Int, negated: Boolean = false): Int = 2 * v + (if negated then 1 else 0)
-    val True = 1
-    val False = 0
-    def not(a: Int): Int = a ^ 1
-    // Hash-consed, unlike `Aiger.scala`'s own `Builder`: that one's calls
-    // are naturally close to unique already (one `symbolCase`/`ite` chain
-    // per distinct `(state, abstraction)` cell), but this construction
-    // repeats the *exact* same symbol-dispatch structure once per PVWAA
-    // state (`dispatchOnSymbol`) and once more per `Goto` reference —
-    // without caching, that's `O(states)` duplicate copies of the same
-    // gates, which is exactly the blow-up this whole backend exists to
-    // avoid elsewhere.
-    private val andCache = mutable.HashMap.empty[(Int, Int), Int]
-    def and(a: Int, b: Int): Int =
-      if a == False || b == False then False
-      else if a == True then b
-      else if b == True then a
-      else if a == b then a
-      else if a == not(b) then False
-      else
-        val key = if a <= b then (a, b) else (b, a)
-        andCache.getOrElseUpdate(
-          key, {
-            val v = freshVar()
-            val out = lit(v)
-            andGates += ((out, a, b))
-            out
-          },
-        )
-    def or(a: Int, c: Int): Int = not(and(not(a), not(c)))
-    def ite(c: Int, t: Int, e: Int): Int = or(and(c, t), and(not(c), e))
-    def xnor(a: Int, c: Int): Int = or(and(a, c), and(not(a), not(c)))
-    def flip(literal: Int, negate: Boolean): Int = if negate then not(literal) else literal
-
-  private def encodeDelta(out: ByteArrayOutputStream, valueIn: Int): Unit =
-    var value = valueIn
-    while (value & ~0x7f) != 0 do
-      out.write((value & 0x7f) | 0x80)
-      value = value >>> 7
-    out.write(value & 0x7f)
-
-  /** The AIGER (binary `.aig`) mirror of `generateSafety`, for the ABC
-    * backend (`Abc.run`) instead of rIC3 — same construction (one latch
-    * per PVWAA state, `Goto` resolved against a frozen first symbol,
-    * `Carry`/`Leave` a freshly guessed input validated one step later),
-    * built from 2-input AND gates instead of BTOR2's typed op lines, with
-    * the `symbol` and frozen-first-symbol registers bit-blasted the same
-    * way `Aiger.generateSafety` bit-blasts its own `symbol` input.
-    *
-    * Two of `Aiger.generateSafety`'s own format constraints apply here
-    * unchanged (see its doc-comment for the full reasoning): every input
-    * and latch variable must be allocated before any AND gate is built
-    * (AIGER numbers variables positionally by role, no per-line role tag),
-    * and every latch must physically reset to 0 — only `active_<initial
-    * state>` needs a logical reset of 1, handled with the same
-    * XOR-with-init trick (`resetsHigh`/`flip`) `Aiger.generateSafety` uses
-    * for its own summary latches. Only power-of-two alphabets are
-    * supported, for the same reason `Aiger.generateSafety` is limited to
-    * them: AIGER has no `constraint`-line equivalent to rule out
-    * out-of-range symbol codes.
-    */
-  def generateSafetyAiger(automaton: ForwardPVWAA): Array[Byte] =
-    if automaton.alphabet.isEmpty then throw DirectPvwaaError("this backend requires a non-empty alphabet")
-    checkGotoTargetsAreSimple(automaton)
-
-    val states = automaton.states
-    val alphabet = automaton.alphabet
-    val alphabetSize = alphabet.length
-    val width = symbolWidth(alphabetSize)
-    if alphabetSize < (1 << width) then
-      throw DirectPvwaaError(
-        s"the AIGER backend doesn't support non-power-of-two alphabets yet (alphabet size $alphabetSize needs a " +
-          s"$width-bit symbol range constraint, which AIGER has no native way to express the way BTOR2's `constraint` line does)"
-      )
-
-    val b = AigerBuilder()
-
-    // inputs first (AIGER's positional numbering requires it): symbol bits,
-    // then one guess bit per state
-    val symbolVars = Vector.fill(width)(b.freshVar())
-    val symbolLits = symbolVars.map(v => b.lit(v))
-    val guessVars = states.map(_ => b.freshVar())
-    val guessOf = states.zip(guessVars.map(v => b.lit(v))).toMap
-
-    // latches next: active/err/started/frozen-first-symbol, all still
-    // before any AND gate
-    val activeLatchVars = states.map(_ => b.freshVar())
-    val activeOf = states.zip(activeLatchVars).toMap
-    val errVar = b.freshVar()
-    val startedVar = b.freshVar()
-    val firstSymbolVars = Vector.fill(width)(b.freshVar())
-
-    def resetsHigh(state: String): Boolean = state == automaton.initialState
-    def trueOldActive(state: String): Int = b.flip(b.lit(activeOf(state)), resetsHigh(state))
-    val errLogical = b.lit(errVar) // resets low
-    val startedLogical = b.lit(startedVar) // resets low
-    val firstSymbolLogical = firstSymbolVars.map(v => b.lit(v)) // each resets low (index 0)
-
-    val effectiveFirstSymbol = firstSymbolLogical.zip(symbolLits).map { case (frozen, live) => b.ite(startedLogical, frozen, live) }
-
-    def bitsEqual(bits: Vector[Int], index: Int): Int =
-      bits.indices.foldLeft(b.True) { (acc, pos) =>
-        val want = if ((index >> (width - 1 - pos)) & 1) == 1 then b.True else b.False
-        b.and(acc, b.xnor(bits(pos), want))
-      }
-
-    def dispatchOnSymbol(state: String, bits: Vector[Int], encode: PositiveFormula => Int): Int =
-      alphabet.zipWithIndex.foldRight(b.False) { case ((symbol, index), acc) =>
-        b.ite(bitsEqual(bits, index), encode(automaton.transitions((state, symbol))), acc)
-      }
-
-    def encode(f: PositiveFormula): Int = f match
-      case PositiveFormula.PositiveConstant(value) => if value then b.True else b.False
-      case PositiveFormula.PositiveAnd(operands)   => operands.map(encode).reduceLeftOption(b.and).getOrElse(b.True)
-      case PositiveFormula.PositiveOr(operands)    => operands.map(encode).reduceLeftOption(b.or).getOrElse(b.False)
-      case PositiveFormula.TransitionAtom(state, Action.Goto) =>
-        dispatchOnSymbol(state, effectiveFirstSymbol, encode)
-      case PositiveFormula.TransitionAtom(state, Action.Carry | Action.Leave) =>
-        guessOf(state)
-
-    val obligationOf = states.map(state => state -> dispatchOnSymbol(state, symbolLits, encode)).toMap
-
-    val allSatisfied = states.map(q => b.or(b.not(trueOldActive(q)), obligationOf(q))).reduceLeftOption(b.and).getOrElse(b.True)
-    val noNewErr = b.and(b.not(errLogical), allSatisfied)
-
-    val allActiveAreFinal = states
-      .map(q => b.or(b.not(trueOldActive(q)), if automaton.finalStates.contains(q) then b.True else b.False))
-      .reduceLeftOption(b.and)
-      .getOrElse(b.True)
-    val reachCheck = b.and(startedLogical, b.and(b.not(errLogical), allActiveAreFinal))
-
-    // physical next-values: flip back into what each physically-reset-to-0
-    // latch actually stores
-    val activeNext = states.map(state => b.flip(guessOf(state), resetsHigh(state)))
-    val errNext = b.not(noNewErr)
-    val startedNext = b.True
-    val firstSymbolNext = effectiveFirstSymbol
-
-    val out = new ByteArrayOutputStream()
-    def writeLine(text: String): Unit = out.write((text + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII))
-
-    val numLatches = states.length + 2 + width
-    writeLine(s"aig ${b.maxVar} ${width + states.length} $numLatches 1 ${b.andGates.length}")
-    for next <- activeNext do writeLine(next.toString)
-    writeLine(errNext.toString)
-    writeLine(startedNext.toString)
-    for next <- firstSymbolNext do writeLine(next.toString)
-    writeLine(reachCheck.toString)
-    for (outLit, aLit, cLit) <- b.andGates do
-      val rhsHigh = math.max(aLit, cLit)
-      val rhsLow = math.min(aLit, cLit)
-      encodeDelta(out, outLit - rhsHigh)
-      encodeDelta(out, rhsHigh - rhsLow)
-    writeLine("c")
-    for (symbol, index) <- alphabet.zipWithIndex do
-      writeLine(s"symbol = $index represents input symbol '$symbol' (bit-blasted, $width-bit).")
-
-    out.toByteArray

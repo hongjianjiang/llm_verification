@@ -42,8 +42,8 @@ final case class BooleanSummary(table: Map[String, Bdd.Node])
   * `state`'s own summary function *syntactically* depends on (via its
   * `goto`/`leave` references); `supportIndex(state)` is
   * `support(state).zipWithIndex.toMap`. Both are kept only for the
-  * legacy per-backend (`Lustre`/`Kind2`/`Btor2`/`Aiger`) explicit-table
-  * encoders, which still enumerate `2^|support(state)|` abstractions
+  * legacy per-backend (`Aiger`) explicit-table
+  * encoder, which still enumerates `2^|support(state)|` abstractions
   * themselves — `BooleanAutomaton`'s own `diagonal`/`transition`/
   * `reachable`/`accepts` no longer need either field, since a BDD node
   * already only ever tests the variables it actually (semantically)
@@ -86,11 +86,15 @@ object BooleanAutomaton:
       case PositiveFormula.PositiveAnd(operands)               => operands.foreach(visit)
       case PositiveFormula.PositiveOr(operands)                => operands.foreach(visit)
       case PositiveFormula.PositiveConstant(_)                 => ()
+      case _: PositiveFormula.SymbolTest                       => ()
     automaton.transitions.values.foreach(visit)
     found.toList.sortBy(state => (automaton.rank(state), state))
 
-  /** The `goto`/`leave` states each state's own transition formulas mention
-    * directly (union across every input symbol).
+  /** The `goto`/`leave` states each state's own transition formula mentions
+    * directly. `PositiveFormula.SymbolTest` leaves don't hold `goto`/`leave`
+    * references, so — unlike when this scanned once per alphabet symbol —
+    * one pass over each state's single formula already finds every
+    * reference regardless of which symbol it fires on.
     */
   private def directTargets(automaton: ForwardPVWAA): Map[String, (Set[String], Set[String])] =
     def atoms(formula: PositiveFormula, goto: scala.collection.mutable.Set[String], leave: scala.collection.mutable.Set[String]): Unit =
@@ -101,10 +105,11 @@ object BooleanAutomaton:
         case PositiveFormula.PositiveAnd(operands)                => operands.foreach(atoms(_, goto, leave))
         case PositiveFormula.PositiveOr(operands)                 => operands.foreach(atoms(_, goto, leave))
         case PositiveFormula.PositiveConstant(_)                  => ()
+        case _: PositiveFormula.SymbolTest                        => ()
     automaton.states.map { state =>
       val goto = scala.collection.mutable.Set.empty[String]
       val leave = scala.collection.mutable.Set.empty[String]
-      for symbol <- automaton.alphabet do atoms(automaton.transitions((state, symbol)), goto, leave)
+      atoms(automaton.transitions(state), goto, leave)
       state -> (goto.toSet, leave.toSet)
     }.toMap
 
@@ -132,15 +137,14 @@ object BooleanAutomaton:
 
   /** Every state's local Boolean-summary table would have
     * `2^support(state).length` entries under the *explicit* per-state
-    * table/mux construction every backend (`Lustre`/`Kind2`/`Btor2`/
-    * `Aiger`) still builds for hardware/Lustre output. Beyond a couple
-    * dozen dependencies that's already tens of millions of entries —
-    * impractical to materialize — and beyond 31 it silently overflows
-    * `Int`'s `1 << n` (wrapping, or going negative), corrupting the table
-    * size instead of just being slow. Those backends call this explicitly,
-    * before doing any of that expensive work, to reject early with a clear
-    * message rather than let either failure mode surface as a confusing
-    * crash or hang.
+    * table/mux construction `Aiger` still builds for hardware output.
+    * Beyond a couple dozen dependencies that's already tens of millions of
+    * entries — impractical to materialize — and beyond 31 it silently
+    * overflows `Int`'s `1 << n` (wrapping, or going negative), corrupting
+    * the table size instead of just being slow. `Aiger` calls this
+    * explicitly, before doing any of that expensive work, to reject early
+    * with a clear message rather than let either failure mode surface as a
+    * confusing crash or hang.
     *
     * `BooleanAutomaton`'s own `diagonal`/`transition`/`reachable`/`accepts`
     * do *not* call this — they build each state's summary as a
@@ -156,7 +160,7 @@ object BooleanAutomaton:
     * `docs/boolean-automaton-construction.tex`) can still be large enough
     * that materializing every cell's `alphabet.length`-way symbol case
     * (one `transitionFormula` evaluation per `(cell, symbol)` pair, in
-    * `Lustre`/`Btor2`/`Aiger`'s `symbolCase`) is impractical — measured on
+    * `Aiger`'s `symbolCase`) is impractical — measured on
     * an `ltl_examples/OrderedSequence` benchmark with 130 states none of
     * which individually exceeded a local support of 16, `N x
     * alphabetSize` reached ~21 million cell-symbol evaluations, enough to
@@ -244,6 +248,8 @@ object BooleanAutomaton:
     // same variable identities, so no projection/remapping is needed).
     def build(formula: PositiveFormula): Bdd.Node = formula match
       case PositiveFormula.PositiveConstant(value) => if value then Bdd.True else Bdd.False
+      case PositiveFormula.SymbolTest(kind, sym, dual) =>
+        if Ltl.symbolMatches(kind, sym, symbol) != dual then Bdd.True else Bdd.False
       case PositiveFormula.PositiveAnd(operands)    => mgr.and(operands.map(build))
       case PositiveFormula.PositiveOr(operands)     => mgr.or(operands.map(build))
       case PositiveFormula.TransitionAtom(state, action) =>
@@ -253,7 +259,7 @@ object BooleanAutomaton:
           case Action.Goto  => mgr.variable(state)
 
     val table = automaton.source.states.map { state =>
-      val formula = automaton.source.transitions((state, symbol))
+      val formula = automaton.source.transitions(state)
       state -> build(formula)
     }.toMap
     BooleanSummary(table)
@@ -378,6 +384,134 @@ object BooleanAutomaton:
         current = previous
       path.reverse.toList
     }
+
+  /** Result of `conflictWitness`: `witness` is the shortest-found (not
+    * necessarily shortest-possible, unlike `witness` over an already-built
+    * `ReachableDfa`) accepting word, `statesVisited` the number of distinct
+    * summaries actually explored, `truncated` whether `maxStates` cut the
+    * search off before it could prove emptiness.
+    */
+  final case class ConflictResult(witness: Option[List[String]], statesVisited: Int, truncated: Boolean)
+
+  /** The static closure of `initialState` under every `TransitionAtom`
+    * edge (`Goto`/`Carry`/`Leave` alike) in the *original* PVWAA
+    * transition-formula graph — i.e. every state `initialState`'s own
+    * acceptance could ever depend on, now or at any future step, since
+    * that formula graph never changes shape across steps (only which
+    * concrete `Bdd.Node` each state's entry holds changes).
+    *
+    * In practice this is close to exactly half of `source.states`:
+    * `Pvwaa` allocates *both* polarities (`dual = true/false`) of every
+    * named definition, but a real formula typically only ever needs one
+    * polarity of each name transitively from its own top-level state —
+    * measured on the `dot_depth`/`y_depth` benchmark families, this
+    * closure is exactly `states.length / 2` at every k tried, from k=9
+    * (46 states, 23 relevant) up to k=800 (3210 states, 1605 relevant).
+    * `conflictWitness` uses this to project away exactly that dead weight
+    * when deciding whether two summaries are equivalent.
+    */
+  private def relevantStates(automaton: ForwardPVWAA): Set[String] =
+    def targetsOf(formula: PositiveFormula): List[String] = formula match
+      case PositiveFormula.TransitionAtom(state, _) => List(state)
+      case PositiveFormula.PositiveAnd(operands)     => operands.flatMap(targetsOf)
+      case PositiveFormula.PositiveOr(operands)      => operands.flatMap(targetsOf)
+      case _                                          => Nil
+    val seen = scala.collection.mutable.LinkedHashSet(automaton.initialState)
+    val queue = scala.collection.mutable.Queue(automaton.initialState)
+    while queue.nonEmpty do
+      for target <- targetsOf(automaton.transitions(queue.dequeue())) if seen.add(target) do queue += target
+    seen.toSet
+
+  /** On-the-fly emptiness/witness search over `ReverseBooleanAutomaton`: a
+    * single depth-first walk from `automaton.initial`, in the spirit of
+    * Li/Rozier/Pu/Zhang/Vardi's CDLSC ("SAT-based Explicit LTLf
+    * Satisfiability Checking", AAAI'19) — build only the part of the state
+    * space actually needed to answer the question, and remember every
+    * summary already proven to have no reachable final configuration
+    * (`dead`) so a shared successor reached by more than one path is never
+    * re-explored.
+    *
+    * `dead`/`onStack` are keyed not by the raw `BooleanSummary` but by its
+    * *projection* onto `relevantStates(automaton.source)` — this is this
+    * function's own analogue of CDLSC's unsat-core generalization, just
+    * computed statically from the formula graph rather than extracted
+    * per-query from a SAT solver: two summaries that agree on every
+    * relevant state are provably interchangeable for every purpose this
+    * search cares about, by induction on `transition`:
+    *
+    *   - `isFinal` only ever reads `diagonal(...)(initialState)`, and
+    *     `diagonal`'s value for any relevant state only actually depends
+    *     (through `Bdd.eval`'s variable substitution) on other relevant
+    *     states' entries — irrelevant entries are computed too (`diagonal`
+    *     sweeps every state) but never *read* by anything relevant.
+    *   - `transition`'s `build` produces a relevant state's *next* entry
+    *     from: `priorDiagonal` of a `Carry` target (relevant, by the same
+    *     argument, and a function of only relevant `diagonal` values),
+    *     `summary.table` of a `Leave` target directly (relevant, and
+    *     already assumed equal), or a `Goto` target's `Bdd` variable (a
+    *     fixed name, trivially equal across any two summaries).
+    *
+    * So relevant-projection equality is preserved by `transition` for
+    * every symbol, forever — a genuine bisimulation with respect to
+    * `isFinal`, not just a same-step heuristic. That also justifies using
+    * it for `onStack` (cycle detection), not only `dead`: re-entering a
+    * projection-equal state while its first occurrence is still being
+    * explored is exactly as redundant as re-entering the identical state
+    * would be, since every future step behaves identically either way.
+    *
+    * Without this, two summaries differing only on some irrelevant
+    * state's entry are spuriously distinct `dead`/`onStack` keys even
+    * though they behave identically — and they routinely do differ there,
+    * since `transition` recomputes *every* state's entry each step
+    * (`diagonal`/`transition` don't skip irrelevant states), including
+    * whichever fresh `Bdd.Node` an irrelevant state's own `SymbolTest`
+    * happens to produce for the symbol just consumed.
+    *
+    * Soundness of treating a cycle back to an in-progress ancestor
+    * (`onStack`) as "no new information" — rather than marking it dead —
+    * is the standard explicit-state reachability argument: the ancestor's
+    * own call already tries every one of its own successors directly, so
+    * nothing reachable through the cycle is missed by not re-descending
+    * into it.
+    *
+    * `automaton.initial` itself is explored for free, matching
+    * `reachable`'s own convention that the initial state doesn't count
+    * against `maxStates` — only states discovered *from* it do.
+    */
+  def conflictWitness(automaton: ReverseBooleanAutomaton, maxStates: Int = 4096): ConflictResult =
+    val relevant = relevantStates(automaton.source)
+    def key(summary: BooleanSummary): Map[String, Bdd.Node] = summary.table.view.filterKeys(relevant).toMap
+
+    val dead = scala.collection.mutable.HashSet.empty[Map[String, Bdd.Node]]
+    val onStack = scala.collection.mutable.HashSet.empty[Map[String, Bdd.Node]]
+    var visited = 0
+    var truncated = false
+    def isFinal(summary: BooleanSummary): Boolean = diagonal(automaton, summary)(automaton.source.initialState)
+
+    def explore(summary: BooleanSummary): Option[List[String]] =
+      val summaryKey = key(summary)
+      onStack += summaryKey
+      var found: Option[List[String]] = None
+      val symbols = automaton.source.alphabet.iterator
+      while found.isEmpty && symbols.hasNext && !truncated do
+        val symbol = symbols.next()
+        val next = transition(automaton, summary, symbol)
+        val nextKey = key(next)
+        found =
+          if isFinal(next) then Some(List(symbol))
+          else if dead.contains(nextKey) || onStack.contains(nextKey) then None
+          else if visited >= maxStates then
+            truncated = true
+            None
+          else
+            visited += 1
+            explore(next).map(symbol :: _)
+      onStack -= summaryKey
+      if found.isEmpty && !truncated then dead += summaryKey
+      found
+
+    val witness = if isFinal(automaton.initial) then Some(Nil) else explore(automaton.initial)
+    ConflictResult(witness, visited, truncated)
 
   /** Merge every distinct label in `labels` to a small int, assigned in
     * first-occurrence order — the "give each partition block a stable id"

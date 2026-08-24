@@ -1,8 +1,8 @@
 package brasp
 
 /** A minimal, dependency-free JSON representation: enough to parse B-RASP
-  * program specifications and Kind2 JSON reports, and to pretty-print our own
-  * `--json` output. Object field order is preserved (insertion order), and
+  * program specifications and pretty-print our own `--json` output. Object
+  * field order is preserved (insertion order), and
   * numbers are kept as raw literal text so arbitrarily large integers (e.g.
   * automaton state counts) survive round-tripping without precision loss.
   */

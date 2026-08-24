@@ -4,7 +4,7 @@ import java.io.File
 import java.nio.file.Files
 
 /** Regression coverage for a specific performance pathology in
-  * `BooleanAutomaton.reachable` and `{Btor2,Aiger}.generateSafetyAuto`:
+  * `BooleanAutomaton.reachable` and `Aiger.generateSafetyAuto`:
   * large-alphabet automata whose local support is also too large for
   * `checkSupportSize`.
   *
@@ -37,8 +37,8 @@ class PerfRegressionSuite extends munit.FunSuite:
   private val nimFixture = new File("ltl_examples/Nim/nim_heaps=1tokens=1.brasp")
 
   // The actual regression took ~18 minutes (~1,080,000 ms); this test does
-  // three separate calls that each redundantly re-explore the automaton
-  // (a direct `reachable`, then Btor2's and Aiger's own internal quick +
+  // two separate calls that each redundantly re-explore the automaton
+  // (a direct `reachable`, then Aiger's own internal quick +
   // full-retry `reachable` calls), measured around 15s total in-suite. 90s
   // still leaves several-times headroom over that measured cost for a
   // loaded/slow machine, while remaining more than 10x too tight for the
@@ -69,12 +69,9 @@ class PerfRegressionSuite extends munit.FunSuite:
     val (dfa, reachableMs) = timedMs(BooleanAutomaton.reachable(automaton, maxStates = 4096))
     assert(reachableMs < boundMs, f"BooleanAutomaton.reachable took ${reachableMs}%.0f ms, expected < $boundMs ms")
 
-    val (_, btor2Ms) = timedMs(intercept[Btor2Error](Btor2.generateSafetyAuto(automaton)))
-    assert(btor2Ms < boundMs, f"Btor2.generateSafetyAuto took ${btor2Ms}%.0f ms, expected < $boundMs ms")
-
     // The fixture's alphabet size (256) is a power of two, so this doesn't
     // hit Aiger's separate non-power-of-two restriction — it exercises the
-    // same quick-attempt-then-fallback path as Btor2 above.
+    // quick-attempt-then-fallback path.
     val (_, aigerMs) = timedMs(intercept[AigerError](Aiger.generateSafetyAuto(automaton)))
     assert(aigerMs < boundMs, f"Aiger.generateSafetyAuto took ${aigerMs}%.0f ms, expected < $boundMs ms")
   }

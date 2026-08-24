@@ -1,0 +1,13 @@
+digraph boolean_automaton {
+  rankdir=LR;
+  node [shape=circle, fontname="monospace"];
+  edge [fontname="monospace", fontsize=10];
+  __start__ [shape=point];
+  __start__ -> "s0";
+  "s0" -> "s1" [label="a"];
+  "s0" -> "s2" [label="b"];
+  "s1" -> "s1" [label="a"];
+  "s1" -> "s2" [label="b"];
+  "s2" -> "s1" [label="a"];
+  "s2" -> "s2" [label="b"];
+}

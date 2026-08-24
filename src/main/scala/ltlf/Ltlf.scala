@@ -292,8 +292,8 @@ object Ltlf:
       * entry to `gotoSupport`, and every state whose local support includes
       * it pays for that with a *doubling* of its `2^|support|`-sized
       * Boolean-summary table (`BooleanAutomaton.fromForwardPvwaa`) — the
-      * same exponent every backend (`Lustre`/`Kind2`/`Btor2`/`Aiger`)
-      * materializes one register/cell per entry of.
+      * same exponent `Aiger`'s explicit-table encoding materializes one
+      * register/cell per entry of.
       */
     private val compileCache = mutable.Map.empty[LtlfFormula, Formula]
     def compile(formula: LtlfFormula): Formula = compileCache.getOrElseUpdate(
@@ -382,7 +382,7 @@ object Ltlf:
     )
 
   /** Compile LTLf text straight to the strict-past `FormulaDag` this
-    * project's other backends (`LtlToBrasp`, Kind2, rIC3, ABC, ...)
+    * project's other backends (`LtlToBrasp`, ABC, ...)
     * consume. Per `Ltl.mirrorToPast`'s doc-comment, this describes the
     * REVERSAL of the original LTLf formula's language, not the formula's
     * own language — callers comparing against reference traces need to

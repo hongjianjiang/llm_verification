@@ -20,6 +20,15 @@ enum Action:
 enum PositiveFormula:
   case PositiveConstant(value: Boolean)
   case TransitionAtom(state: String, action: Action)
+  /** An unresolved symbol-dependent leaf — `Ltl.symbolMatches(kind, symbol,
+    * concreteSymbol) != dual` once a concrete symbol is known, mirroring the
+    * `PositiveConstant(value != dual)` a `Ltl.Atom` leaf used to be resolved
+    * into eagerly, once per alphabet symbol, at automaton-construction time.
+    * Keeping it as a leaf instead is what lets `ForwardPVWAA.transitions`
+    * hold one formula per *state* rather than one per `(state, symbol)` —
+    * see `ForwardPVWAA`'s own doc-comment.
+    */
+  case SymbolTest(kind: AtomKind, symbol: Option[String], dual: Boolean)
   case PositiveAnd(operands: List[PositiveFormula])
   case PositiveOr(operands: List[PositiveFormula])
 
@@ -30,11 +39,23 @@ enum PositiveFormula:
   * head, and `goto` returns the head to the pebble. At `head == |word|`, the
   * head is on the implicit EOS boundary and acceptance is determined by
   * `finalStates`.
+  *
+  * `transitions` holds exactly one formula per state, *not* one per
+  * `(state, symbol)` — symbol-dependence lives inside the formula itself,
+  * as `PositiveFormula.SymbolTest` leaves, resolved against a concrete
+  * symbol by whoever's walking the formula (`Pvwaa.accepts`, each backend's
+  * own encoder), not baked in at construction time. Before this, a formula
+  * whose truth genuinely varies per symbol (any `SymbolAtom`/`BitAtom` use)
+  * was rebuilt once per alphabet symbol here, making this map — and every
+  * backend that reads it — `O(states x |alphabet|)` even for automata whose
+  * *actual* per-state formula size is small; for a 14-atomic-proposition
+  * LTLf formula (`|alphabet| = 2^14`) that alone took several seconds and
+  * over a million map entries before any backend ran at all.
   */
 final case class ForwardPVWAA(
     alphabet: List[String],
     states: List[String],
-    transitions: Map[(String, String), PositiveFormula],
+    transitions: Map[String, PositiveFormula],
     initialState: String,
     finalStates: Set[String],
     rank: Map[String, Int],
@@ -44,28 +65,6 @@ object Pvwaa:
   import Formula.*
   import PositiveFormula.*
   import JsonValue.*
-
-  /** Does `top(formula, dual, symbol, current)` actually depend on `symbol`?
-    * Only a direct `Atom(SymbolAtom | BitAtom, ...)` leaf does —
-    * `Reference` becomes a `Goto`/`Carry` atom regardless of `symbol`, and
-    * `Until` delegates to `predicate`, which never inspects `symbol` at
-    * all. Named definitions built purely from references to other names
-    * are the common case for large alphabets, and are therefore fully
-    * symbol-independent: `top` would otherwise rebuild an identical,
-    * possibly large `PositiveFormula` tree once per alphabet symbol for
-    * nothing. Anything not recognized here conservatively answers `true`
-    * (forces per-symbol evaluation, which is always correct, just not
-    * optimized) rather than risk caching a formula that does vary.
-    */
-  private def usesSymbol(formula: Formula): Boolean = formula match
-    case Constant(_) | Reference(_, _)                                => false
-    case Atom(AtomKind.SymbolAtom | AtomKind.BitAtom, Position.I, _)   => true
-    case _: Atom                                                       => false
-    case Negation(operand)                                             => usesSymbol(operand)
-    case Conjunction(operands)                                         => operands.exists(usesSymbol)
-    case Disjunction(operands)                                         => operands.exists(usesSymbol)
-    case _: Until                                                      => false
-    case _                                                             => true
 
   /** Rewrite `Next`/`Eventually`/`Always` into the `Until`/`Negation` terms
     * `top`, `predicate`, `finalOf`, and `symbolsOf` already handle, via the
@@ -103,6 +102,9 @@ object Pvwaa:
   private def positiveRender(formula: PositiveFormula): String = formula match
     case PositiveConstant(value) => if value then "⊤" else "⊥"
     case TransitionAtom(state, action) => s"($state, ${action.label})"
+    case SymbolTest(kind, symbol, dual) =>
+      val base = s"${kind.jsonLabel}(${symbol.getOrElse("?")})"
+      if dual then s"¬$base" else base
     case PositiveAnd(operands) => "(" + operands.map(positiveRender).mkString(" ∧ ") + ")"
     case PositiveOr(operands)  => "(" + operands.map(positiveRender).mkString(" ∨ ") + ")"
 
@@ -114,16 +116,22 @@ object Pvwaa:
       s"final at EOS: {${automaton.finalStates.toList.sorted.mkString(", ")}}",
       "transitions:",
     )
-    val body = for
-      state <- automaton.states
-      symbol <- automaton.alphabet
-    yield s"  δ($state, $symbol) = ${positiveRender(automaton.transitions((state, symbol)))}"
+    val body = for state <- automaton.states yield s"  δ($state) = ${positiveRender(automaton.transitions(state))}"
     (header ++ body).mkString("\n")
 
   private def positiveToJson(formula: PositiveFormula): JsonValue = formula match
     case PositiveConstant(value) => JObj(Vector("type" -> str("const"), "value" -> bool(value)))
     case TransitionAtom(state, action) =>
       JObj(Vector("type" -> str("atom"), "state" -> str(state), "action" -> str(action.label)))
+    case SymbolTest(kind, symbol, dual) =>
+      JObj(
+        Vector(
+          "type" -> str("symbol_test"),
+          "kind" -> str(kind.jsonLabel),
+          "symbol" -> symbol.map(str).getOrElse(JNull),
+          "dual" -> bool(dual),
+        )
+      )
     case PositiveAnd(operands) => JObj(Vector("type" -> str("and"), "args" -> JArr(operands.map(positiveToJson).toVector)))
     case PositiveOr(operands)  => JObj(Vector("type" -> str("or"), "args" -> JArr(operands.map(positiveToJson).toVector)))
 
@@ -131,26 +139,25 @@ object Pvwaa:
     *
     * The PVWAA is alternating (transitions are AND/OR trees of pebble
     * actions, not single deterministic edges), so this collapses each
-    * `(state, symbol)` transition to one edge per `TransitionAtom` it
-    * mentions, labeled `symbol/action`, dropping the AND/OR combination
-    * itself. That loses precision (see `--json` for the exact formula) but
-    * gives a legible overview graph.
+    * state's transition formula to one edge per `TransitionAtom` it
+    * mentions, labeled by action, dropping the AND/OR combination and any
+    * `SymbolTest` guards. That loses precision (see `--json` for the exact
+    * formula) but gives a legible overview graph.
     */
   def toDot(automaton: ForwardPVWAA, name: String = "pvwaa"): String =
     def atomsOf(formula: PositiveFormula): List[(String, Action)] = formula match
-      case PositiveConstant(_)           => Nil
-      case TransitionAtom(state, action) => List(state -> action)
-      case PositiveAnd(operands)          => operands.flatMap(atomsOf)
-      case PositiveOr(operands)           => operands.flatMap(atomsOf)
+      case PositiveConstant(_) | SymbolTest(_, _, _) => Nil
+      case TransitionAtom(state, action)              => List(state -> action)
+      case PositiveAnd(operands)                       => operands.flatMap(atomsOf)
+      case PositiveOr(operands)                        => operands.flatMap(atomsOf)
 
     def quote(text: String): String = "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     val edgeLabels = scala.collection.mutable.LinkedHashMap.empty[(String, String), scala.collection.mutable.ArrayBuffer[String]]
     for
       state <- automaton.states
-      symbol <- automaton.alphabet
-      (target, action) <- atomsOf(automaton.transitions((state, symbol)))
-    do edgeLabels.getOrElseUpdate((state, target), scala.collection.mutable.ArrayBuffer.empty) += s"$symbol/${action.label}"
+      (target, action) <- atomsOf(automaton.transitions(state))
+    do edgeLabels.getOrElseUpdate((state, target), scala.collection.mutable.ArrayBuffer.empty) += action.label
 
     val lines = scala.collection.mutable.ArrayBuffer.empty[String]
     lines += s"digraph $name {"
@@ -178,9 +185,7 @@ object Pvwaa:
         "initial_state" -> str(automaton.initialState),
         "final_states" -> JArr(automaton.finalStates.toList.sorted.map(str).toVector),
         "rank" -> JObj(automaton.rank.toVector.map { case (state, index) => state -> JsonValue.int(index) }),
-        "transitions" -> JObj(automaton.transitions.toVector.map { case ((state, symbol), formula) =>
-          s"$state\u0000$symbol" -> positiveToJson(formula)
-        }),
+        "transitions" -> JObj(automaton.transitions.toVector.map { case (state, formula) => state -> positiveToJson(formula) }),
       )
     )
 
@@ -220,21 +225,20 @@ object Pvwaa:
     val ranks: Map[String, Int] =
       names.zipWithIndex.flatMap { case (name, index) => duals.map(dual => stateName(name, dual) -> index) }.toMap
 
-    def top(formula: Formula, dual: Boolean, symbol: String, current: String): PositiveFormula = formula match
+    def top(formula: Formula, dual: Boolean, current: String): PositiveFormula = formula match
       case Constant(value) => PositiveConstant(value != dual)
       case Atom(kind, variable, sym) =>
         if variable != Position.I then throw PVWAAError("an atom at witness position belongs inside an Until operand")
-        val value = Ltl.symbolMatches(kind, sym, symbol)
-        PositiveConstant(value != dual)
+        SymbolTest(kind, sym, dual)
       case Reference(name, variable) =>
         if variable != Position.I then throw PVWAAError("a witness reference belongs inside an Until operand")
         TransitionAtom(stateName(name, dual), Action.Goto)
-      case Negation(operand) => top(operand, !dual, symbol, current)
+      case Negation(operand) => top(operand, !dual, current)
       case Conjunction(operands) =>
-        val children = operands.map(o => top(o, dual, symbol, current))
+        val children = operands.map(o => top(o, dual, current))
         if dual then PositiveOr(children) else PositiveAnd(children)
       case Disjunction(operands) =>
-        val children = operands.map(o => top(o, dual, symbol, current))
+        val children = operands.map(o => top(o, dual, current))
         if dual then PositiveAnd(children) else PositiveOr(children)
       case Until(_, _, left, right) =>
         val leftP = predicate(left, dual, current)
@@ -280,29 +284,17 @@ object Pvwaa:
     val finalStates: Set[String] =
       (for name <- names; dual <- duals if finalOf(definitions(name), dual) yield stateName(name, dual)).toSet
 
-    // Built directly into a mutable hash map (sized up front) rather than
-    // through a `for`-comprehension into a `List`/`Vector` and then an
-    // immutable map: for a large alphabet this table has `states x
-    // alphabet` entries (tens of millions for a several-thousand-symbol
-    // alphabet), and repeatedly growing/rehashing a persistent immutable
-    // map one entry at a time dominates runtime at that scale.
-    val transitionsBuilder = Map.newBuilder[(String, String), PositiveFormula]
-    transitionsBuilder.sizeHint(names.length * duals.length * alphabet.length)
+    // One formula per state — symbol-dependence lives inside it now
+    // (`PositiveFormula.SymbolTest`), not in how many times `top` gets
+    // called, so this is `O(states)`, not `O(states x alphabet)`.
+    val transitionsBuilder = Map.newBuilder[String, PositiveFormula]
+    transitionsBuilder.sizeHint(names.length * duals.length)
     for
       name <- names
       dual <- duals
     do
       val current = stateName(name, dual)
-      val formula = definitions(name)
-      // If `top` can't actually vary with `symbol` for this definition,
-      // build it once and reuse across the whole alphabet instead of
-      // rebuilding an identical tree per symbol (see `usesSymbol`).
-      if usesSymbol(formula) then
-        for symbol <- alphabet do transitionsBuilder += (current, symbol) -> top(formula, dual, symbol, current)
-      else
-        for first <- alphabet.headOption do
-          val shared = top(formula, dual, first, current)
-          for symbol <- alphabet do transitionsBuilder += (current, symbol) -> shared
+      transitionsBuilder += current -> top(definitions(name), dual, current)
 
     ForwardPVWAA(
       alphabet = alphabet,
@@ -328,14 +320,15 @@ object Pvwaa:
         case None =>
           val result =
             if head == length then automaton.finalStates.contains(state)
-            else satisfy(automaton.transitions((state, word(head))), pebble, head)
+            else satisfy(automaton.transitions(state), word(head), pebble, head)
           memo(key) = result
           result
 
-    def satisfy(formula: PositiveFormula, pebble: Int, head: Int): Boolean = formula match
-      case PositiveConstant(value) => value
-      case PositiveAnd(operands)   => operands.forall(o => satisfy(o, pebble, head))
-      case PositiveOr(operands)    => operands.exists(o => satisfy(o, pebble, head))
+    def satisfy(formula: PositiveFormula, symbol: String, pebble: Int, head: Int): Boolean = formula match
+      case PositiveConstant(value)          => value
+      case SymbolTest(kind, sym, dual)      => Ltl.symbolMatches(kind, sym, symbol) != dual
+      case PositiveAnd(operands)            => operands.forall(o => satisfy(o, symbol, pebble, head))
+      case PositiveOr(operands)             => operands.exists(o => satisfy(o, symbol, pebble, head))
       case TransitionAtom(state, action) =>
         action match
           case Action.Goto  => run(state, pebble, pebble)

@@ -1,8 +1,10 @@
 # B-RASP verification
 
 Compiles a Boolean B-RASP program through 2LTL → PVWAA → a Boolean-summary
-automaton → a Kind2-checkable Lustre monitor, and can check inclusion /
-equivalence between two programs with Kind2.
+automaton → a binary AIGER model, checked in-process by ABC (or, via the
+non-determinized `--direct` backend, a BTOR2 model printed for you to feed
+to an external solver such as rIC3 by hand). Can check inclusion /
+equivalence between two programs either way.
 
 ## Build
 
@@ -22,12 +24,9 @@ every line with its own logging, which corrupts captured output.
 | `--future` | strict-future 2LTL (mirrored, evaluated on `reverse(w)`) |
 | `--pvwaa` | forward pebble VWAA |
 | `--boolean-automaton` | Boolean-summary automaton (reverses the PVWAA) |
-| `--lustre` | Lustre monitor for the Boolean-summary automaton |
-| `--kind2-safety` | Kind2 contract: the monitor never accepts |
-| `--kind2-subset SUPERSET INPUT` | Kind2 contract: `L(INPUT) ⊆ L(SUPERSET)` |
-| `--kind2-equivalent OTHER INPUT` | Kind2 contract: `L(INPUT) = L(OTHER)` |
-| `--btor2` | BTOR2 model of the Boolean-summary automaton (rIC3 backend) |
-| `--aiger` | binary AIGER model of the same automaton (ABC backend) |
+| `--subset SUPERSET INPUT` | goal: `L(INPUT) ⊆ L(SUPERSET)` (any backend below) |
+| `--equivalent OTHER INPUT` | goal: `L(INPUT) = L(OTHER)` (any backend below) |
+| `--aiger` | binary AIGER model of the Boolean-summary automaton (ABC backend) |
 | `--brasp` | 2LTL back into a B-RASP program |
 | `--ltl` | compiled formula in `.ltl` text syntax |
 | `--json` | current stage as JSON |
@@ -43,102 +42,25 @@ needed. Note the last one can collide with a hand-written example source of
 the same input stem (e.g. `at_least_two_a`), in which case the round-tripped
 `--brasp` output overwrites it.
 
-### Lustre monitor interface (`--lustre`)
-
-Emits a node with a restartable interface:
-
-```
-node NAME(symbol: int; valid: bool; start: bool; last: bool)
-  returns (accept_prefix: bool; accept_word: bool; input_ok: bool);
-```
-
-- `symbol` — index into the program's alphabet (see the node's leading comments).
-- `valid` — does this tick present a symbol at all (`false` = stutter/pause)?
-- `start` — reset the monitor to its initial state on this tick?
-- `last` — does the word end on this tick?
-- `accept_prefix` — is the prefix consumed since the last reset accepted?
-- `accept_word` — `last and accept_prefix`.
-- `input_ok` — is a `valid` tick's `symbol` actually in range?
-
-`--kind2-safety`/`--kind2-subset`/`--kind2-equivalent` wrap this in a
-contract that pins `valid = true`, `start = (true -> false)`, `last = true`
-— i.e. one continuous word, one symbol per tick — and expose just
-`symbol: int` to Kind2.
-
-### rIC3 backend (`--btor2`, `--run-ric3`)
-
-[rIC3](https://github.com/gipsyh/rIC3) is a bit-level IC3/PDR hardware model
-checker; it takes AIGER/BTOR2 circuits, not Lustre, so it's wired up as a
-second backend alongside Kind2 rather than through the Lustre monitor above.
-
-`--btor2`/`--run-ric3` work standalone (just like `--boolean-automaton`) or
-alongside `--kind2-subset`/`--kind2-equivalent`, which still pick which
-automaton gets built (subset/equivalence counterexample search vs. the plain
-program); with none of those, the goal defaults to plain safety — the same
-"is any nonempty word accepted" question `--kind2-safety` asks Kind2.
-
-| Flag | Effect |
-| --- | --- |
-| `--btor2` | print the BTOR2 model instead of the plain automaton/Lustre |
-| `--btor2-max-states N` | reachable-state cap for the compact DFA encoding below (default 4096) |
-| `--run-ric3` | run rIC3 on it and print a summary (implies `--btor2`) |
-| `--ric3-bin PATH` | rIC3 executable (default `../rIC3/target/release/ric3`, sibling to this repo) |
-| `--ric3-mode ic3\|portfolio` | `ric3 check` subcommand — single-thread IC3 (default) or 16-thread portfolio |
-| `--ric3-raw` | print rIC3's raw stdout (verdict + BTOR2 witness) instead of the summary |
-
-`--ric3-mode` defaults to `ic3`, not rIC3's own default of `portfolio`:
-portfolio mode forks 16 worker processes, which hangs under some sandboxed
-dev environments (this one included) — pass `--ric3-mode portfolio`
-explicitly once you've confirmed `fork()` works fine in yours, e.g. for
-larger models where the single-threaded engine is too slow.
-
-The BTOR2 model prefers a compact encoding: it first explores the
-automaton's *actually reachable* states (breadth-first, up to
-`--btor2-max-states`) and, if that exploration completes, minimizes the
-resulting DFA (`BooleanAutomaton.minimize`, exact Moore-style partition
-refinement — `reachable`'s own dedup is exact structural equality only, so
-this routinely merges away a further 30-95% of the states on real
-specifications) before emitting a single `ceil(log2(stateCount))`-bit state
-register with a `next`-state lookup — its size tracks the real *minimized*
-reachable-state count, not the per-state Boolean-summary support size. If
-exploration is truncated instead (more
-reachable states than `--btor2-max-states`), it falls back to the older
-direct encoding (one Boolean state register per summary cell, `init`/`next`
-per Kind2's `start`/`pre`). Either way there's no `valid`/`start`/`last`
-input because BTOR2's `init`/`next` already mean "reset once at step 0,
-consume one symbol every step", and `bad` = the "nonempty prefix accepted"
-condition. The empty-word case doesn't get a second `bad` line: unlike
-Kind2 (which still asks the solver to reconfirm it), it's already a
-compile-time constant, so `--run-ric3`'s summary reports it directly
-without invoking rIC3 for it.
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-ric3
-java -jar $JAR --run-ric3 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
-java -jar $JAR --run-ric3 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
-java -jar $JAR examples/brasp/last_a.brasp --btor2 > model.btor2
-/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
-```
-
 ### Native backend (`--run-native`)
 
 `--run-native` answers the same plain-safety/subset/equivalence question as
-`--run-ric3`/`--run-abc`, but entirely in-process: it runs
+`--run-abc`, but entirely in-process: it runs
 `BooleanAutomaton.reachable` directly and checks whether any accepting
-state is reachable, with no BTOR2/AIGER model and no external solver at
+state is reachable, with no AIGER model and no external solver at
 all. It exists because, for some formula families, the *smallest correct*
-BTOR2/AIGER model this backend can build (the compact reachable-DFA
-encoding above) doesn't actually help an external IC3/PDR solver: a
+AIGER model this backend can build (the compact reachable-DFA
+encoding described below) doesn't actually help an external IC3/PDR solver: a
 minimized DFA's transition table, bit-blasted, is a lookup with no
-exploitable structure, so rIC3 can end up *slower* on it than on the
+exploitable structure, so a solver can end up *slower* on it than on the
 naive per-state encoding, or even crash parsing a large enough table.
 Skipping the encoding step altogether and asking `reachable` the question
 directly avoids both problems — it costs exactly the BFS exploration this
 backend was already going to do internally, no more.
 
 `--native-max-states N` (default 4096, same default as
-`--btor2-max-states`) caps the exploration; hitting it reports `UNKNOWN`
-rather than guessing. Unlike `--btor2`/`--aiger`, there is no non-`--run-`
+`--aiger-max-states`) caps the exploration; hitting it reports `UNKNOWN`
+rather than guessing. Unlike `--aiger`, there is no non-`--run-`
 form — this backend only ever answers the question, it never emits a
 model — and no raw-output mode, since there is no external tool's stdout
 to show. The empty-word case is reported the same "compile-time constant"
@@ -149,9 +71,26 @@ java -jar $JAR examples/brasp/last_a.brasp --run-native
 java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native --native-max-states 2000000
 ```
 
-### Direct/non-determinized backend (`--direct`, `--run-direct`)
+`--run-native-conflict` answers the same question via
+`BooleanAutomaton.conflictWitness` instead of `reachable` — a DFS that
+stops as soon as it finds a bad-prefix witness rather than materializing
+the whole reachable DFA, and dedupes/cycle-detects states by their
+projection onto only the formula's "relevant" states (a genuine
+bisimulation w.r.t. the accept condition — see `conflictWitness`'s
+doc-comment) instead of the full Boolean-summary table. That makes it the
+optimized alternative to `--run-native`: cheaper whenever you only need a
+witness or a PROVED/NOT PROVED/UNKNOWN verdict, not the full DFA. It
+shares `--native-max-states` with `--run-native` and reports the same
+three-way verdict shape (labeled `brasp-native-conflict`).
 
-`--btor2`/`--aiger`/`--run-native` all build on `BooleanAutomaton`, which
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-native-conflict
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native-conflict --native-max-states 2000000
+```
+
+### Direct/non-determinized BTOR2 output (`--direct`)
+
+`--aiger`/`--run-native` both build on `BooleanAutomaton`, which
 *determinizes* the PVWAA first (a Miyano-Hayashi-style subset construction
 over Boolean-summary functions) before emitting hardware or exploring
 reachability. For a handful of `two_var` formula families
@@ -160,7 +99,7 @@ itself is exponential in the alphabet size — `checkSupportSize` already
 rejects sigma=15+ outright, and `--run-native`'s own reachable-state
 enumeration hits the same wall a bit later, just as expensively.
 
-`--direct`/`--run-direct` skip determinization entirely: they encode the
+`--direct` skips determinization entirely: it encodes the
 *forward PVWAA* (the alternating automaton `Pvwaa.fromFuture2ltl` produces,
 before `BooleanAutomaton` ever touches it) straight to BTOR2, one Boolean
 register per PVWAA state — the same trick the string solver
@@ -181,40 +120,37 @@ goto-targets that are themselves symbol-constant, with no `Carry`/`Leave`
 of their own — true for every `Once`/`Hist`/`Yst`/`Since`-over-symbol-atoms
 formula this project's own generators produce, but not for a formula with
 one `Until` nested inside another `Until`'s operand (e.g. `at_least_two_a`'s
-`Hist`-based construction) — those still need `--btor2`/`--aiger`.
+`Hist`-based construction) — those still need the determinized `--aiger`/`--run-abc` path.
 
-Where it applies, this is dramatically smaller and faster than every other
-backend on the same input: `same_letter_before` at sigma=16 fails outright
-on every other backend (`checkSupportSize`) or times out (`--run-native`,
-`--run-ric3`); `--run-direct` solves it in under a second, and scales to
-sigma=256 in well under a minute.
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-direct
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --run-direct
-```
-
-`--direct-aiger`/`--run-direct-abc` are the AIGER/ABC-backed siblings of
-`--direct`/`--run-direct` (same construction, same
-`checkGotoTargetsAreSimple` scope check, just 2-input AND gates and a
-bit-blasted `symbol` input instead of BTOR2's typed ops — the same
-ABC-needs-power-of-two-alphabets limitation `--aiger` already has). Worth
-reaching for even when `--run-direct` already works: measured on the same
-circuit, ABC's `pdr` is consistently 2-3x faster than rIC3's `ic3` on this
-family, and the gap grows with sigma.
+Where it applies, the resulting model is dramatically smaller and faster to
+check than every other backend on the same input: `same_letter_before` at
+sigma=16 fails outright on every other backend (`checkSupportSize`) or times
+out (`--run-native`); this model, checked with rIC3, solves it in under a
+second, and scales to sigma=256 in well under a minute.
 
 ```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-direct-abc
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --run-direct-abc
+java -jar $JAR examples/brasp/last_a.brasp --direct > model.btor2
+/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --direct > model.btor2
+/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
 ```
+
+There is no AIGER/ABC sibling of this backend: on the `dot_depth` family,
+the same non-determinized construction encoded to AIGER and run through
+ABC's `pdr` scales far worse with formula depth than the determinized
+`--aiger`/`--run-abc` path (times out well before `--run-abc` does), so it
+isn't wired up here — where `--direct` applies, stick with its BTOR2 output
+(fed to rIC3 by hand); elsewhere, use `--aiger`/`--run-abc`.
 
 ### ABC backend (`--aiger`, `--run-abc`)
 
 [ABC](https://github.com/berkeley-abc/abc)'s `pdr` (Property Directed
-Reachability, i.e. IC3) is a third backend for the same automaton, alongside
-Kind2 and rIC3 — same `--aiger`/`--run-abc` vs. `--kind2-*` split as rIC3's
-`--btor2`/`--run-ric3` above (goal flags pick *what*, these pick *which
-backend*).
+Reachability, i.e. IC3) is the only backend in this project that runs a
+solver automatically — `--direct` only ever
+prints a model for you to check with an external tool by hand. `--aiger`
+prints the model, `--run-abc` runs ABC on it directly (implies `--aiger`);
+`--subset`/`--equivalent` still pick *what* it checks, same as every other
+backend.
 
 | Flag | Effect |
 | --- | --- |
@@ -224,10 +160,13 @@ backend*).
 | `--abc-bin PATH` | ABC executable (default `../abc/abc`, sibling to this repo) |
 | `--abc-raw` | print ABC's raw stdout instead of the summary |
 
-The AIGER model prefers the same compact, minimized encoding `Btor2` does
-(see above): it first explores the automaton's *actually reachable* states
-(up to `--aiger-max-states`) and, if that exploration completes, minimizes
-the DFA before emitting `ceil(log2(stateCount))` latches encoding the
+The AIGER model prefers a compact, minimized encoding: it first explores
+the automaton's *actually reachable* states (breadth-first, up to
+`--aiger-max-states`) and, if that exploration completes, minimizes
+the resulting DFA (`BooleanAutomaton.minimize`, exact Moore-style partition
+refinement — `reachable`'s own dedup is exact structural equality only, so
+this routinely merges away a further 30-95% of the states on real
+specifications) before emitting `ceil(log2(stateCount))` latches encoding the
 current state in binary, with a next-state lookup bit-blasted from
 `dfa.transitions` — its size tracks the real *minimized* reachable-state
 count, not the per-state Boolean-summary support size.
@@ -243,13 +182,29 @@ as uninitialized regardless of what the file declares, giving wrong
 verdicts rather than an error, so `Abc.run` always goes through the classic
 `read_aiger` + `pdr` pipeline instead.
 
-Only power-of-two alphabets are supported either way (see `--btor2`'s
-`constraint` line above — AIGER has no equivalent way to express a
-non-power-of-two symbol range).
+`Abc.run`'s script always runs `scleanup; dc2` before `pdr`. It matters a
+lot on formula families with small per-state local support but a long
+syntactic chain (e.g. `dot_depth`): `checkSupportSize` passes trivially
+there, so `generateSafetyAuto` picks the explicit direct-table encoding
+without ever attempting the compact DFA one — leaving a lot of purely
+structural redundancy in the model. `scleanup` (structural sequential
+cleanup, no SAT/induction) and `dc2` (combinational don't-care-based
+resynthesis) are both cheap and clean most of that up before `pdr` ever
+sees it — measured on `dot_depth`: k=1600 went from 119.6s to 6.7s, and
+k=2400/k=3200 (previously timing out past 150s) now solve in 12.3s/16.6s.
+(`&scorr`, ABC's *sequential* redundancy checker, was tried first and
+rejected: it's itself SAT/induction-based and didn't finish in 60s on a
+16k-latch model — no cheaper than the `pdr` problem it would be
+preprocessing away.)
+
+Only power-of-two alphabets are supported either way — AIGER has no way to
+express a non-power-of-two symbol range (unlike a word-level format like
+BTOR2, which can add an explicit `constraint` line ruling out-of-range
+values).
 
 ```sh
 java -jar $JAR examples/brasp/last_a.brasp --run-abc
-java -jar $JAR --run-abc --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
+java -jar $JAR --run-abc --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
 java -jar $JAR examples/brasp/last_a.brasp --aiger > model.aig
 /Users/alexander/work/abc/abc -c "read_aiger model.aig; pdr; print_status"
 ```
@@ -335,8 +290,6 @@ java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --future
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --pvwaa
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --boolean-automaton
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --lustre > monitor.lus
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --kind2-safety > safety.lus
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/ends_in_ab.brasp --word ab
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/at_least_two_a.brasp --ltl > at_least_two_a.ltl
 java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/at_least_two_a.ltl --pvwaa
@@ -356,28 +309,8 @@ java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/contains_a.ltl 
 java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/contains_a.ltl --boolean-automaton --word ab
 ```
 
-Check property using Kind2 model:
+Check a subset/equivalence property with ABC:
 ```sh
-java -jar target/scala-3.5.1/brasp-verification.jar --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp > subset.lus
-java -jar target/scala-3.5.1/brasp-verification.jar --run-kind2 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
-java -jar target/scala-3.5.1/brasp-verification.jar --run-kind2 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
-```
-
-Run a generated Kind2 model directly:
-
-```sh
-/Users/alexander/work/kind2 -json safety.lus
-```
-
-Check the same properties with rIC3 instead:
-```sh
-java -jar target/scala-3.5.1/brasp-verification.jar --btor2 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp > subset.btor2
-java -jar target/scala-3.5.1/brasp-verification.jar --run-ric3 --kind2-subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
-java -jar target/scala-3.5.1/brasp-verification.jar --run-ric3 --kind2-equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
-```
-
-Run a generated BTOR2 model directly:
-
-```sh
-/Users/alexander/work/rIC3/target/release/ric3 check safety.btor2 --cex ic3
+java -jar target/scala-3.5.1/brasp-verification.jar --run-abc --subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
+java -jar target/scala-3.5.1/brasp-verification.jar --run-abc --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
 ```

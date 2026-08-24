@@ -1,8 +1,0 @@
-logic past-strict
-alphabet a b
-
-is_a := sym(a)@i
-last_a_is_a := (!(is_a@j)) S ((is_a@j & is_a@j))
-
-output := last_a_is_a@i
-evaluate at i = |w| (the final input position)

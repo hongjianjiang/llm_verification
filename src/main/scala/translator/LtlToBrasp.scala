@@ -83,9 +83,9 @@ object LtlToBrasp:
     // per matching alphabet symbol, exactly the construction `Ltlf` itself
     // used to build eagerly for every symbol before `BitAtom` existed. This
     // is intentionally lazy and `--brasp`-only: it doesn't run on the
-    // `--btor2`/`--run-ric3` path (`Pvwaa`/`BooleanAutomaton`/`Btor2` never
-    // call into this translator), so it can't reintroduce the `2^|AP|`
-    // blowup `BitAtom` exists to avoid there. Cached per matching alphabet
+    // `--aiger`/`--direct` paths (`Pvwaa`/`BooleanAutomaton`/`DirectPvwaa`/
+    // `Aiger` never call into this translator), so it can't reintroduce the
+    // `2^|AP|` blowup `BitAtom` exists to avoid there. Cached per matching alphabet
     // symbol (not per `BitAtom` occurrence): two propositions whose bit
     // patterns happen to overlap share the same helper subprograms.
     val symbolHelpers = scala.collection.mutable.LinkedHashMap.empty[String, String]

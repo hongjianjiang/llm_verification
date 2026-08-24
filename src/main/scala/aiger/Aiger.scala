@@ -3,25 +3,26 @@ package brasp
 import java.io.ByteArrayOutputStream
 import scala.collection.mutable
 
-/** Binary AIGER (.aig) backend for reverse Boolean-summary automata: an
-  * alternative to `Btor2` for backends that check bit-level circuits
-  * (AIGER) rather than word-level ones (BTOR2), e.g. ABC.
+/** Binary AIGER (.aig) backend for reverse Boolean-summary automata: bit-level
+  * circuits (AIGER) checked by ABC. The non-determinized `--direct` backend
+  * (`DirectPvwaa.scala`) emits a separate BTOR2 encoding for word-level
+  * checkers such as rIC3, but this project has no BTOR2 encoder of its own
+  * for the determinized automaton.
   *
-  * The encoding is the same one `Btor2.generateSafety` uses — one Boolean
-  * state register (here, an AIGER latch) per `(pvwaa state, abstraction)`
-  * summary cell, a `symbol` input bit-blasted into individual AIGER inputs,
-  * and a single output literal for "the prefix consumed so far is
-  * accepted" — just built from 2-input AND gates (with literal negation for
-  * free, per the AIGER convention) instead of BTOR2's typed op lines.
+  * The encoding: one Boolean state register (here, an AIGER latch) per
+  * `(pvwaa state, abstraction)` summary cell, a `symbol` input bit-blasted
+  * into individual AIGER inputs, and a single output literal for "the
+  * prefix consumed so far is accepted" — built from 2-input AND gates (with
+  * literal negation for free, per the AIGER convention) instead of BTOR2's
+  * typed op lines.
   *
   * Two format quirks this needs to work around, found by hex-diffing
   * ABC's own `write_aiger` output against a hand-derivation from its
   * reader source (`ioReadAiger.c`):
   *   - AIGER numbers variables *positionally*: `[1, I]` are inputs, `[I+1,
   *     I+L]` latches, and everything after that an AND gate — there's no
-  *     per-line keyword tagging a variable's role, so (unlike `Btor2`)
-  *     every input and latch variable must be allocated before any AND
-  *     gate is created.
+  *     per-line keyword tagging a variable's role, so every input and
+  *     latch variable must be allocated before any AND gate is created.
   *   - This build's binary reader only supports the plain (pre-1.9)
   *     latch format: one line per latch, just its `next` literal — no
   *     explicit reset field, always reset-to-0. So every latch here is
@@ -78,9 +79,10 @@ object Aiger:
     out.write(value & 0x7f)
 
   /** Emit an AIGER model proving the monitor's bad language is unreachable:
-    * the sole output is reachable iff some nonempty word is accepted. See
-    * `Btor2.generateSafety`'s doc-comment for why the empty-word case
-    * doesn't need a second output here either.
+    * the sole output is reachable iff some nonempty word is accepted. The
+    * empty-word case doesn't need a second output here either: it's
+    * already a compile-time constant (`automaton.initial`'s own diagonal),
+    * checked before ever calling the solver.
     */
   def generateSafety(automaton: ReverseBooleanAutomaton): Array[Byte] =
     if automaton.source.alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
@@ -166,12 +168,14 @@ object Aiger:
     // `leave`/`goto` atom's target is always in `owner`'s support by
     // construction (see `BooleanAutomaton.supportOf`), so the projections
     // below always find a valid index.
-    def transitionFormula(owner: String, ownerAbstraction: Vector[Boolean], formula: PositiveFormula): Int = formula match
+    def transitionFormula(owner: String, ownerAbstraction: Vector[Boolean], symbol: String, formula: PositiveFormula): Int = formula match
       case PositiveFormula.PositiveConstant(value) => if value then b.True else b.False
+      case PositiveFormula.SymbolTest(kind, sym, dual) =>
+        if Ltl.symbolMatches(kind, sym, symbol) != dual then b.True else b.False
       case PositiveFormula.PositiveAnd(operands) =>
-        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption(b.and).getOrElse(b.True)
+        operands.map(transitionFormula(owner, ownerAbstraction, symbol, _)).reduceLeftOption(b.and).getOrElse(b.True)
       case PositiveFormula.PositiveOr(operands) =>
-        operands.map(transitionFormula(owner, ownerAbstraction, _)).reduceLeftOption(b.or).getOrElse(b.False)
+        operands.map(transitionFormula(owner, ownerAbstraction, symbol, _)).reduceLeftOption(b.or).getOrElse(b.False)
       case PositiveFormula.TransitionAtom(state, action) =>
         val ownerIndex = automaton.supportIndex(owner)
         action match
@@ -182,7 +186,7 @@ object Aiger:
           case Action.Goto => if ownerAbstraction(ownerIndex(state)) then b.True else b.False
 
     /** Bitwise equality of the `symbol` input against the constant `index`,
-      * i.e. the AIGER bit-blast of `Btor2`'s `eq $symbolInput ${constIndex(index)}`.
+      * i.e. the AIGER bit-blast of a BTOR2-style `eq $symbolInput ${constIndex(index)}`.
       */
     def symbolEquals(index: Int): Int =
       (0 until width).foldLeft(b.True) { (acc, bitPos) =>
@@ -193,7 +197,7 @@ object Aiger:
     def symbolCase(state: String, abstraction: Vector[Boolean]): Int =
       val base = trueOldLit(state, abstraction)
       alphabet.zipWithIndex.foldRight(base) { case ((symbol, index), acc) =>
-        val transition = transitionFormula(state, abstraction, automaton.source.transitions((state, symbol)))
+        val transition = transitionFormula(state, abstraction, symbol, automaton.source.transitions(state))
         b.ite(symbolEquals(index), transition, acc)
       }
 
@@ -236,21 +240,21 @@ object Aiger:
   /** Emit an AIGER model for `dfa` (`BooleanAutomaton.reachable`'s explicit
     * exploration of the automaton's *actually* reachable states) directly:
     * `ceil(log2(stateCount))` latches encoding the current state in binary,
-    * plus a next-state lookup over `dfa.transitions` — the AIGER mirror of
-    * `Btor2.generateSafetyFromDfa`. See that doc-comment for why `dfa` must
-    * not be `truncated`, and why this encoding's size tracks the
-    * automaton's real reachable-state count rather than the syntactic
-    * `2^|local support|` bound `generateSafety` is stuck with.
+    * plus a next-state lookup over `dfa.transitions`. `dfa` must not be
+    * `truncated` (an incomplete transition table would silently misencode
+    * an unexplored, possibly-bad state as unreachable) — this encoding's
+    * size tracks the automaton's real reachable-state count rather than
+    * the syntactic `2^|local support|` bound `generateSafety` is stuck
+    * with.
     *
     * `dfa.initial` is always `0` (see `ReachableDfa`'s doc-comment), so
     * unlike `generateSafety`'s summary latches, no reset-polarity XOR trick
     * is needed here: every state latch already means what it says, and
     * physically resets to the all-zero (= initial) state for free.
     *
-    * `dfa` is minimized (`BooleanAutomaton.minimize`) before encoding —
-    * see `Btor2.generateSafetyFromDfa`'s doc-comment for why (on real
-    * specs, `reachable`'s exact-equality dedup routinely leaves states
-    * behind that `minimize` merges for free). `minimize` guarantees its
+    * `dfa` is minimized (`BooleanAutomaton.minimize`) before encoding: on
+    * real specs, `reachable`'s exact-equality dedup routinely leaves states
+    * behind that `minimize` merges for free. `minimize` guarantees its
     * output's initial state is still block `0`, so the no-XOR-trick
     * property above continues to hold after minimizing too.
     */
@@ -300,8 +304,7 @@ object Aiger:
     // next-state bit `bitPos`, as a function of the current-state latches
     // and the symbol input: select `state`'s row via `stateEqLits`, then
     // within that row select the symbol's target bit via `symbolEqLits` —
-    // the bit-blasted mirror of `Btor2.generateSafetyFromDfa`'s two nested
-    // cascading equality chains.
+    // two nested cascading equality chains, bit-blasted.
     def nextBit(bitPos: Int): Int =
       (0 until stateCount).foldRight(b.False) { case (state, outer) =>
         val perSymbol = alphabet.indices.foldRight(b.False) { case (index, inner) =>
@@ -336,18 +339,42 @@ object Aiger:
 
     out.toByteArray
 
-  /** The AIGER mirror of `Btor2.quickDfaWork` — see that constant's
-    * doc-comment.
+  /** Total `transition` calls (not states) `generateSafetyAuto`'s quick DFA
+    * attempt is willing to spend, regardless of whether `generateSafety`'s
+    * explicit table would also fit — most real specifications have a
+    * reachable state count well under a few dozen, so the resulting
+    * per-state budget catches the common case and gets the smaller,
+    * minimized encoding "for free."
+    *
+    * Budgeted by `transition` calls rather than a flat state count because
+    * `reachable`'s cost is `states explored x alphabet size`: a
+    * large-alphabet automaton makes even a "small" fixed state count
+    * expensive. Dividing by alphabet size keeps this quick attempt's
+    * *wall-clock* cost roughly bounded regardless of alphabet size,
+    * shrinking to a token 1-state look before giving up on
+    * enormous-alphabet automata instead of silently reintroducing that
+    * pathology as this function's own new fixed overhead.
     */
   private val quickDfaWork = 256
 
   /** Prefer a small, bounded `BooleanAutomaton.reachable` + `minimize`
-    * attempt first (`quickDfaWork`), then the per-state Boolean-summary
-    * table encoding (`generateSafety`) whenever `checkSupportSize` passes,
-    * then a full-`maxStates`-budget retry of the reachable-DFA encoding
-    * (`generateSafetyFromDfa`) as a last resort — the AIGER mirror of
-    * `Btor2.generateSafetyAuto`; see its doc-comment for the full reasoning
-    * behind this ordering.
+    * attempt first (`quickDfaWork`); if that doesn't finish, fall back to
+    * the per-state Boolean-summary table encoding (`generateSafety`)
+    * whenever `checkSupportSize` passes, and only then retry the
+    * reachable-DFA encoding (`generateSafetyFromDfa`) at the full
+    * `maxStates` budget as a last resort for automata too tangled for
+    * `generateSafety` either.
+    *
+    * The explicit-table-first fallback ordering (rather than always
+    * retrying the DFA search at the full budget) is deliberate:
+    * `checkSupportSize` bounds each state's *local* dependency count,
+    * which is unrelated to the automaton's *global* reachable-state count
+    * — a formula can easily have small per-state support (cheap for
+    * `generateSafety`, and instant to check — no search required) while
+    * still having a huge, slow-to-explore reachable summary space
+    * (expensive for `BooleanAutomaton.reachable`'s BFS, which pays
+    * `O(reachable states x alphabet size)` `transition` calls just to find
+    * out).
     */
   def generateSafetyAuto(automaton: ReverseBooleanAutomaton, maxStates: Int = 4096): Array[Byte] =
     val quickBudget = math.min(maxStates, quickDfaWork / math.max(1, automaton.source.alphabet.length))

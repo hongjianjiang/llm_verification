@@ -16,25 +16,12 @@ final case class CliArgs(
     future: Boolean = false,
     pvwaa: Boolean = false,
     booleanAutomaton: Boolean = false,
-    lustre: Boolean = false,
-    kind2Safety: Boolean = false,
-    kind2Subset: Option[File] = None,
-    kind2Equivalent: Option[File] = None,
-    runKind2: Boolean = false,
-    kind2Bin: File,
-    kind2Json: Boolean = false,
-    btor2: Boolean = false,
-    btor2MaxStates: Int = 4096,
-    runRic3: Boolean = false,
+    subset: Option[File] = None,
+    equivalent: Option[File] = None,
     runNative: Boolean = false,
+    runNativeConflict: Boolean = false,
     nativeMaxStates: Int = 4096,
     direct: Boolean = false,
-    runDirect: Boolean = false,
-    directAiger: Boolean = false,
-    runDirectAbc: Boolean = false,
-    ric3Bin: File,
-    ric3Mode: String = "ic3",
-    ric3Raw: Boolean = false,
     aiger: Boolean = false,
     aigerMaxStates: Int = 4096,
     runAbc: Boolean = false,
@@ -63,14 +50,6 @@ object Translator:
     val lines = dag.definitions.toVector.map { case (name, formula) => s"$name(i) := ${Ltl.render(formula)}" }
     (lines :+ "" :+ s"output := ${Ltl.render(dag.output)}" :+ s"evaluate at ${dag.evaluationPoint}").mkString("\n")
 
-  private def defaultKind2Bin: File =
-    val cwd = new File(System.getProperty("user.dir"))
-    new File(cwd.getParentFile, "kind2")
-
-  private def defaultRic3Bin: File =
-    val cwd = new File(System.getProperty("user.dir"))
-    new File(cwd.getParentFile, "rIC3/target/release/ric3")
-
   private def defaultAbcBin: File =
     val cwd = new File(System.getProperty("user.dir"))
     new File(cwd.getParentFile, "abc/abc")
@@ -80,25 +59,12 @@ object Translator:
     var future = false
     var pvwaa = false
     var booleanAutomaton = false
-    var lustre = false
-    var kind2Safety = false
-    var kind2Subset: Option[File] = None
-    var kind2Equivalent: Option[File] = None
-    var runKind2 = false
-    var kind2Bin: File = defaultKind2Bin
-    var kind2Json = false
-    var btor2Out = false
-    var btor2MaxStates = 4096
-    var runRic3 = false
+    var subset: Option[File] = None
+    var equivalent: Option[File] = None
     var runNative = false
+    var runNativeConflict = false
     var nativeMaxStates = 4096
     var directOut = false
-    var runDirect = false
-    var directAigerOut = false
-    var runDirectAbc = false
-    var ric3Bin: File = defaultRic3Bin
-    var ric3Mode = "ic3"
-    var ric3Raw = false
     var aigerOut = false
     var aigerMaxStates = 4096
     var runAbc = false
@@ -120,29 +86,14 @@ object Translator:
         case "--future"            => future = true
         case "--pvwaa"              => pvwaa = true
         case "--boolean-automaton"  => booleanAutomaton = true
-        case "--lustre"             => lustre = true
-        case "--kind2-safety"       => kind2Safety = true
-        case "--kind2-subset"       => kind2Subset = Some(File(takeValue("--kind2-subset", it)))
-        case "--kind2-equivalent"   => kind2Equivalent = Some(File(takeValue("--kind2-equivalent", it)))
-        case "--run-kind2"          => runKind2 = true
-        case "--kind2-bin"          => kind2Bin = File(takeValue("--kind2-bin", it))
-        case "--kind2-json"         => kind2Json = true
-        case "--btor2"              => btor2Out = true
-        case "--btor2-max-states"   =>
-          val raw = takeValue("--btor2-max-states", it)
-          btor2MaxStates = raw.toIntOption.getOrElse(fail(s"argument --btor2-max-states: expected an integer, got '$raw'"))
-        case "--run-ric3"           => runRic3 = true
+        case "--subset"             => subset = Some(File(takeValue("--subset", it)))
+        case "--equivalent"         => equivalent = Some(File(takeValue("--equivalent", it)))
         case "--run-native"         => runNative = true
+        case "--run-native-conflict" => runNativeConflict = true
         case "--native-max-states"  =>
           val raw = takeValue("--native-max-states", it)
           nativeMaxStates = raw.toIntOption.getOrElse(fail(s"argument --native-max-states: expected an integer, got '$raw'"))
         case "--direct"             => directOut = true
-        case "--run-direct"         => runDirect = true
-        case "--direct-aiger"       => directAigerOut = true
-        case "--run-direct-abc"     => runDirectAbc = true
-        case "--ric3-bin"           => ric3Bin = File(takeValue("--ric3-bin", it))
-        case "--ric3-mode"          => ric3Mode = takeValue("--ric3-mode", it)
-        case "--ric3-raw"           => ric3Raw = true
         case "--aiger"              => aigerOut = true
         case "--aiger-max-states"   =>
           val raw = takeValue("--aiger-max-states", it)
@@ -166,25 +117,12 @@ object Translator:
       future = future,
       pvwaa = pvwaa,
       booleanAutomaton = booleanAutomaton,
-      lustre = lustre,
-      kind2Safety = kind2Safety,
-      kind2Subset = kind2Subset,
-      kind2Equivalent = kind2Equivalent,
-      runKind2 = runKind2,
-      kind2Bin = kind2Bin,
-      kind2Json = kind2Json,
-      btor2 = btor2Out,
-      btor2MaxStates = btor2MaxStates,
-      runRic3 = runRic3,
+      subset = subset,
+      equivalent = equivalent,
       runNative = runNative,
+      runNativeConflict = runNativeConflict,
       nativeMaxStates = nativeMaxStates,
       direct = directOut,
-      runDirect = runDirect,
-      directAiger = directAigerOut,
-      runDirectAbc = runDirectAbc,
-      ric3Bin = ric3Bin,
-      ric3Mode = ric3Mode,
-      ric3Raw = ric3Raw,
       aiger = aigerOut,
       aigerMaxStates = aigerMaxStates,
       runAbc = runAbc,
@@ -271,34 +209,47 @@ object Translator:
     if dag.logic == Logic.FutureStrict then dag else mirrorToFuture(dag)
 
   /** `--run-native`'s verdict: the same three-way PROVED/NOT PROVED/UNKNOWN
-    * shape `Ric3.summarize`/`Abc`'s summaries use, but computed entirely
-    * in-process from `BooleanAutomaton.reachable` — no BTOR2/AIGER model,
+    * shape `Abc`'s summaries use, but computed entirely in-process from
+    * `BooleanAutomaton.reachable` — no BTOR2/AIGER model,
     * no external solver. `dfa.truncated` (the exploration budget was too
     * small to reach a verdict either way) is this check's only source of
     * `UNKNOWN`; unlike an external solver there is no timeout/resource
     * notion beyond that budget.
     */
-  def nativeSummary(dfa: ReachableDfa, alphabet: List[String], goal: String, emptyBad: Boolean): String =
-    if dfa.truncated then
+  /** Shared rendering for both native backends' PROVED/NOT PROVED/UNKNOWN
+    * verdict: `backend` is the label line prefix (`nativeSummary` uses
+    * `brasp-native`, `conflictSummary` uses `brasp-native-conflict`),
+    * `nonemptyWitness` is `None` when no nonempty bad prefix was found —
+    * either because none exists, or (when `truncated`) because the search
+    * gave up before finding out either way.
+    */
+  private def renderVerdict(
+      backend: String,
+      truncated: Boolean,
+      exploredCount: Int,
+      nonemptyWitness: Option[List[String]],
+      goal: String,
+      emptyBad: Boolean,
+  ): String =
+    if truncated then
       goal match
-        case "inclusion"   => s"brasp-native: UNKNOWN — inclusion not decided within ${dfa.stateCount} states (raise --native-max-states)."
-        case "equivalence" => s"brasp-native: UNKNOWN — equivalence not decided within ${dfa.stateCount} states (raise --native-max-states)."
-        case _             => s"brasp-native: UNKNOWN — safety not decided within ${dfa.stateCount} states (raise --native-max-states)."
+        case "inclusion"   => s"$backend: UNKNOWN — inclusion not decided within $exploredCount states (raise --native-max-states)."
+        case "equivalence" => s"$backend: UNKNOWN — equivalence not decided within $exploredCount states (raise --native-max-states)."
+        case _             => s"$backend: UNKNOWN — safety not decided within $exploredCount states (raise --native-max-states)."
     else
-      val nonemptyWitness = BooleanAutomaton.witness(dfa, alphabet)
       val mainProved = nonemptyWitness.isEmpty
       val allProved = mainProved && !emptyBad
       val heading =
         if allProved then
           goal match
-            case "inclusion"   => "brasp-native: PROVED — inclusion holds."
-            case "equivalence" => "brasp-native: PROVED — the languages are equivalent."
-            case _             => "brasp-native: PROVED — no bad prefix is reachable."
+            case "inclusion"   => s"$backend: PROVED — inclusion holds."
+            case "equivalence" => s"$backend: PROVED — the languages are equivalent."
+            case _             => s"$backend: PROVED — no bad prefix is reachable."
         else
           goal match
-            case "inclusion"   => "brasp-native: NOT PROVED — a counterexample was found."
-            case "equivalence" => "brasp-native: NOT PROVED — the languages differ."
-            case _             => "brasp-native: NOT PROVED — a bad prefix is reachable."
+            case "inclusion"   => s"$backend: NOT PROVED — a counterexample was found."
+            case "equivalence" => s"$backend: NOT PROVED — the languages differ."
+            case _             => s"$backend: NOT PROVED — a bad prefix is reachable."
       val mainLabel = goal match
         case "inclusion"   => "no nonempty counterexample"
         case "equivalence" => "no nonempty distinguishing word"
@@ -314,6 +265,18 @@ object Translator:
       var emptyLine = s"  $emptyMark $emptyLabel (${if emptyBad then "sat" else "unsat"})"
       if emptyBad then emptyLine += " — witness: ε"
       List(heading, mainLine, emptyLine).mkString("\n")
+
+  def nativeSummary(dfa: ReachableDfa, alphabet: List[String], goal: String, emptyBad: Boolean): String =
+    val nonemptyWitness = if dfa.truncated then None else BooleanAutomaton.witness(dfa, alphabet)
+    renderVerdict("brasp-native", dfa.truncated, dfa.stateCount, nonemptyWitness, goal, emptyBad)
+
+  /** `--run-native-conflict`'s verdict — same shape as `nativeSummary`, but
+    * from `BooleanAutomaton.conflictWitness`'s on-the-fly search instead of
+    * a fully materialized `reachable` DFA. See that function's doc-comment
+    * for how the two searches differ.
+    */
+  def conflictSummary(result: BooleanAutomaton.ConflictResult, goal: String, emptyBad: Boolean): String =
+    renderVerdict("brasp-native-conflict", result.truncated, result.statesVisited, result.witness, goal, emptyBad)
 
   /** Split `--word` text into symbols: whitespace-separated if it contains
     * whitespace (for multi-character symbols), otherwise one symbol per
@@ -346,37 +309,33 @@ object Translator:
           System.err.println(s"translator: error: $message")
           return 2
 
-    val kind2Modes = List(parsed.kind2Safety, parsed.kind2Subset.isDefined, parsed.kind2Equivalent.isDefined).count(identity)
-    if kind2Modes > 1 then
-      System.err.println("translator: error: choose only one of --kind2-safety, --kind2-subset, or --kind2-equivalent")
-      return 2
-    if parsed.runKind2 && kind2Modes == 0 then
-      System.err.println("translator: error: --run-kind2 requires --kind2-safety, --kind2-subset, or --kind2-equivalent")
+    if parsed.subset.isDefined && parsed.equivalent.isDefined then
+      System.err.println("translator: error: choose only one of --subset or --equivalent")
       return 2
     val compiled: CompileResult =
       try
         val translated: FormulaDag =
           if isLtlFile(parsed.input) then
-            if parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined then
+            if parsed.subset.isDefined || parsed.equivalent.isDefined then
               throw TranslationError(
-                "'.ltl' input is not supported with --kind2-subset/--kind2-equivalent; use a B-RASP program (.brasp or JSON) there"
+                "'.ltl' input is not supported with --subset/--equivalent; use a B-RASP program (.brasp or JSON) there"
               )
             LtlText.parse(readFile(parsed.input))
           else
             val inputProgram = loadProgram(parsed.input)
-            if parsed.kind2Subset.isDefined then
-              BraspToLtl.translateProgram(Inclusion.counterexampleProgram(inputProgram, loadProgram(parsed.kind2Subset.get)))
-            else if parsed.kind2Equivalent.isDefined then
-              BraspToLtl.translateProgram(Inclusion.equivalenceCounterexampleProgram(inputProgram, loadProgram(parsed.kind2Equivalent.get)))
+            if parsed.subset.isDefined then
+              BraspToLtl.translateProgram(Inclusion.counterexampleProgram(inputProgram, loadProgram(parsed.subset.get)))
+            else if parsed.equivalent.isDefined then
+              BraspToLtl.translateProgram(Inclusion.equivalenceCounterexampleProgram(inputProgram, loadProgram(parsed.equivalent.get)))
             else BraspToLtl.translateProgram(inputProgram)
 
         val needsBooleanAutomaton =
-          parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined || parsed.kind2Safety ||
-            parsed.lustre || parsed.booleanAutomaton || parsed.btor2 || parsed.runRic3 ||
-            parsed.runNative || parsed.aiger || parsed.runAbc
+          parsed.subset.isDefined || parsed.equivalent.isDefined ||
+            parsed.booleanAutomaton ||
+            parsed.runNative || parsed.runNativeConflict || parsed.aiger || parsed.runAbc
         if needsBooleanAutomaton then
           CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(translated))))
-        else if parsed.pvwaa || parsed.direct || parsed.runDirect || parsed.directAiger || parsed.runDirectAbc then
+        else if parsed.pvwaa || parsed.direct then
           CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(translated)))
         else if parsed.future then
           CompileResult.Dag(mirrorToFuture(translated))
@@ -396,9 +355,6 @@ object Translator:
           System.err.println(s"translator: $message")
           return 2
         case PVWAAError(message) =>
-          System.err.println(s"translator: $message")
-          return 2
-        case LustreError(message) =>
           System.err.println(s"translator: $message")
           return 2
         case LtlError(message) =>
@@ -429,42 +385,26 @@ object Translator:
             case Some(code) => return code
             case None       => ()
           println(dot)
-        else if parsed.runRic3 || parsed.btor2 then
-          val goal =
-            if parsed.kind2Subset.isDefined then "inclusion"
-            else if parsed.kind2Equivalent.isDefined then "equivalence"
-            else "safety"
-          val monitorName =
-            if parsed.kind2Subset.isDefined then "subset_monitor"
-            else if parsed.kind2Equivalent.isDefined then "equivalence_monitor"
-            else "brasp_monitor"
-          val model =
-            try Btor2.generateSafetyAuto(automaton, monitorName, parsed.btor2MaxStates)
-            catch
-              case Btor2Error(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          if parsed.runRic3 then
-            try
-              val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
-              return Ric3.run(model, parsed.ric3Bin, goal, automaton.source.alphabet, emptyBad, parsed.ric3Mode, parsed.ric3Raw)
-            catch
-              case Ric3Error(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          println(model)
         else if parsed.runNative then
           val goal =
-            if parsed.kind2Subset.isDefined then "inclusion"
-            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            if parsed.subset.isDefined then "inclusion"
+            else if parsed.equivalent.isDefined then "equivalence"
             else "safety"
           val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
           val dfa = BooleanAutomaton.reachable(automaton, parsed.nativeMaxStates)
           println(nativeSummary(dfa, automaton.source.alphabet, goal, emptyBad))
+        else if parsed.runNativeConflict then
+          val goal =
+            if parsed.subset.isDefined then "inclusion"
+            else if parsed.equivalent.isDefined then "equivalence"
+            else "safety"
+          val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+          val result = BooleanAutomaton.conflictWitness(automaton, parsed.nativeMaxStates)
+          println(conflictSummary(result, goal, emptyBad))
         else if parsed.runAbc || parsed.aiger then
           val goal =
-            if parsed.kind2Subset.isDefined then "inclusion"
-            else if parsed.kind2Equivalent.isDefined then "equivalence"
+            if parsed.subset.isDefined then "inclusion"
+            else if parsed.equivalent.isDefined then "equivalence"
             else "safety"
           val model =
             try Aiger.generateSafetyAuto(automaton, parsed.aigerMaxStates)
@@ -482,79 +422,20 @@ object Translator:
                 return 2
           System.out.write(model)
           System.out.flush()
-        else if parsed.kind2Subset.isDefined || parsed.kind2Equivalent.isDefined || parsed.kind2Safety then
-          val goal =
-            if parsed.kind2Subset.isDefined then "inclusion"
-            else if parsed.kind2Equivalent.isDefined then "equivalence"
-            else "safety"
-          val harness =
-            try
-              if parsed.kind2Subset.isDefined then
-                Kind2.generateSafety(automaton, monitorName = "subset_monitor", mainName = "kind2_subset")
-              else if parsed.kind2Equivalent.isDefined then
-                Kind2.generateSafety(automaton, monitorName = "equivalence_monitor", mainName = "kind2_equivalence")
-              else Kind2.generateSafety(automaton)
-            catch
-              // Kind2.generateSafety delegates to Lustre.generate internally
-              // and doesn't rewrap its errors, so both types can surface here.
-              case Kind2Error(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-              case LustreError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          if parsed.runKind2 then
-            try return Kind2.run(harness, parsed.kind2Bin, goal, automaton.source.alphabet, parsed.kind2Json)
-            catch
-              case Kind2Error(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          println(harness)
-        else if parsed.lustre then
-          try println(Lustre.generate(automaton))
-          catch
-            case LustreError(message) =>
-              System.err.println(s"translator: $message")
-              return 2
         else
           trySaveArtifact(graphOutputPath(parsed.input, suffix = "boolean_automaton"), BooleanAutomaton.toDot(automaton)) match
             case Some(code) => return code
             case None       => ()
           println(if parsed.json then Json.render(BooleanAutomaton.toJson(automaton)) else BooleanAutomaton.render(automaton))
       case CompileResult.PvwaaResult(automaton) =>
-        if parsed.runDirect || parsed.direct then
+        if parsed.direct then
           val model =
             try DirectPvwaa.generateSafety(automaton)
             catch
               case DirectPvwaaError(message) =>
                 System.err.println(s"translator: $message")
                 return 2
-          if parsed.runDirect then
-            try
-              val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
-              return Ric3.run(model, parsed.ric3Bin, "safety", automaton.alphabet, emptyBad, parsed.ric3Mode, parsed.ric3Raw, reverseWitness = true)
-            catch
-              case Ric3Error(message) =>
-                System.err.println(s"translator: $message")
-                return 2
           println(model)
-        else if parsed.runDirectAbc || parsed.directAiger then
-          val model =
-            try DirectPvwaa.generateSafetyAiger(automaton)
-            catch
-              case DirectPvwaaError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          if parsed.runDirectAbc then
-            try
-              val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
-              return Abc.run(model, parsed.abcBin, "safety", emptyBad, parsed.abcRaw)
-            catch
-              case AbcError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          System.out.write(model)
-          System.out.flush()
         else if parsed.dot then
           val dot = Pvwaa.toDot(automaton)
           trySaveArtifact(graphOutputPath(parsed.input, suffix = "pvwaa"), dot) match
@@ -593,4 +474,36 @@ object Translator:
           )
     0
 
-  def main(args: Array[String]): Unit = System.exit(run(args))
+  /** `run`'s work happens on a dedicated thread with a much larger stack
+    * than the JVM default (~512KB-1MB): some benchmark formulas are
+    * legitimately deep, not just wide — the `two_var/monotone_past` family
+    * builds one `Formula` subtree nesting `!(... & pairwise-combination
+    * ...)` to `O(sigma^2)` levels (~860 for `sigma=42`), deep enough to
+    * overflow the default stack in `Ltl.mirror`'s ordinary recursive
+    * descent well before any backend's own size/complexity limit would
+    * ever reject it. `-Xss` on the `java` command line would also fix
+    * this, but only if the caller remembers to pass it; doing it here
+    * means the packaged jar just works without one.
+    */
+  def main(args: Array[String]): Unit =
+    var exitCode = 1
+    val worker = new Thread(
+      null,
+      () =>
+        exitCode =
+          try run(args)
+          catch
+            case _: StackOverflowError =>
+              System.err.println(
+                "translator: error: formula is too deeply nested for this process's stack (even after " +
+                  "raising it well past the JVM default) — this is a recursion-depth limit in the " +
+                  "compiler's own AST walk, not a rejection from any backend's own size check"
+              )
+              1
+      ,
+      "brasp-worker",
+      256L * 1024 * 1024,
+    )
+    worker.start()
+    worker.join()
+    System.exit(exitCode)

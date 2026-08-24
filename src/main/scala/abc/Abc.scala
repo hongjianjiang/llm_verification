@@ -7,7 +7,7 @@ import scala.sys.process.ProcessIO
 import scala.sys.process.stringSeqToProcess
 
 /** ABC (https://github.com/berkeley-abc/abc) PDR runner for `Aiger`-encoded
-  * reverse Boolean-summary automata — the AIGER-backed sibling of `Ric3`.
+  * reverse Boolean-summary automata.
   *
   * Uses the classic (non-`&`) command family: `read_aiger` (binary AIGER
   * only) + `pdr`. The GIA package's `&read` also reads AIGER and accepts
@@ -30,8 +30,8 @@ object Abc:
 
   /** Turn ABC's stdout (from the script in `run`) into a compact
     * user-facing verdict. `emptyBad` is the empty-word answer, already
-    * known at compile time (see `Btor2`'s doc-comment) — it does not come
-    * from ABC.
+    * known at compile time (`automaton.initial`'s own diagonal) — it does
+    * not come from ABC.
     */
   def summarize(stdout: String, goal: String, emptyBad: Boolean): String =
     val outcome =
@@ -98,7 +98,23 @@ object Abc:
     // ASCII/GIA path was found to silently ignore latch reset values, but
     // `read_aiger` handles binary AIGER (with all-reset-to-0 latches, per
     // `Aiger`'s doc-comment) correctly.
-    val script = s"read_aiger ${modelPath.toString}; pdr; print_status"
+    //
+    // `scleanup; dc2` before `pdr`: `Aiger.generateSafetyAuto` picks its
+    // explicit per-`(state, abstraction)` table encoding whenever
+    // `checkSupportSize` passes (i.e. whenever local support is small),
+    // regardless of the automaton's *global* reachable-state count — on
+    // formula families with small local support but a long syntactic
+    // chain (e.g. `dot_depth`), that leaves a lot of purely structural
+    // redundancy for `pdr`'s own SAT-based induction to wade through.
+    // `scleanup` (cheap, purely structural sequential cleanup — no SAT/
+    // induction reasoning, unlike `&scorr` which was tried first and
+    // didn't finish in 60s on a 16k-latch model) and `dc2` (combinational
+    // don't-care-based resynthesis) measured a combined 32x-plus speedup
+    // and solved several previously-timing-out cases outright (see the
+    // dot_depth k=1600/2400/3200 measurements in git history around this
+    // change) — cheap enough to run unconditionally, since it costs
+    // nothing meaningful on small models.
+    val script = s"read_aiger ${modelPath.toString}; scleanup; dc2; pdr; print_status"
     val command = Seq(executable.getAbsolutePath, "-c", script)
     val exitCode =
       try command.run(processIO).exitValue()

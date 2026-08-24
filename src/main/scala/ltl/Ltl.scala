@@ -1,6 +1,7 @@
 package brasp
 
 import scala.collection.immutable.VectorMap
+import scala.util.control.TailCalls.{TailRec, done, tailcall}
 
 /** Formal abstract syntax for strict two-variable LTL over finite words.
   *
@@ -72,23 +73,49 @@ object Ltl:
     case AtomKind.BitAtom    => declared.exists(index => concrete(index.toInt) == '1')
     case AtomKind.BosAtom | AtomKind.EosAtom => false
 
-  /** Exchange strict past and strict future operators under word reversal. */
-  def mirror(formula: Formula): Formula = formula match
-    case Constant(_) | Reference(_, _) => formula
-    case Atom(AtomKind.BosAtom, variable, symbol) => Atom(AtomKind.EosAtom, variable, symbol)
-    case Atom(AtomKind.EosAtom, variable, symbol) => Atom(AtomKind.BosAtom, variable, symbol)
-    case a: Atom                                   => a
-    case Negation(operand)     => Negation(mirror(operand))
-    case Conjunction(operands) => Conjunction(operands.map(mirror))
-    case Disjunction(operands) => Disjunction(operands.map(mirror))
-    case Previous(anchor, witness, operand)     => Next(anchor, witness, mirror(operand))
-    case Once(anchor, witness, operand)         => Eventually(anchor, witness, mirror(operand))
-    case Historically(anchor, witness, operand) => Always(anchor, witness, mirror(operand))
-    case Since(anchor, witness, left, right)    => Until(anchor, witness, mirror(left), mirror(right))
-    case Next(anchor, witness, operand)         => Previous(anchor, witness, mirror(operand))
-    case Eventually(anchor, witness, operand)   => Once(anchor, witness, mirror(operand))
-    case Always(anchor, witness, operand)       => Historically(anchor, witness, mirror(operand))
-    case Until(anchor, witness, left, right)    => Since(anchor, witness, mirror(left), mirror(right))
+  /** Exchange strict past and strict future operators under word reversal.
+    *
+    * Trampolined (`scala.util.control.TailCalls`) rather than a direct
+    * recursive descent: some benchmark formulas nest a single `Formula`
+    * subtree hundreds of levels deep (the `two_var/monotone_past` family
+    * builds `!(... & pairwise-combination ...)` to `O(sigma^2)` levels,
+    * ~860 for `sigma=42`), which overflowed the JVM's default thread stack
+    * here well before any backend's own size/complexity limit would ever
+    * reject the formula. The trampoline moves the "stack" onto the heap —
+    * `tailcall`/`.map`/`.flatMap` build up a chain of thunks that
+    * `TailRec#result`'s own loop unwinds iteratively, so recursion depth is
+    * bounded by available memory, not by JVM stack size.
+    */
+  def mirror(formula: Formula): Formula = mirrorTC(formula).result
+
+  private def mirrorTC(formula: Formula): TailRec[Formula] = formula match
+    case Constant(_) | Reference(_, _) => done(formula)
+    case Atom(AtomKind.BosAtom, variable, symbol) => done(Atom(AtomKind.EosAtom, variable, symbol))
+    case Atom(AtomKind.EosAtom, variable, symbol) => done(Atom(AtomKind.BosAtom, variable, symbol))
+    case a: Atom                                   => done(a)
+    case Negation(operand)     => tailcall(mirrorTC(operand)).map(Negation(_))
+    case Conjunction(operands) => mirrorAllTC(operands).map(Conjunction(_))
+    case Disjunction(operands) => mirrorAllTC(operands).map(Disjunction(_))
+    case Previous(anchor, witness, operand)     => tailcall(mirrorTC(operand)).map(Next(anchor, witness, _))
+    case Once(anchor, witness, operand)         => tailcall(mirrorTC(operand)).map(Eventually(anchor, witness, _))
+    case Historically(anchor, witness, operand) => tailcall(mirrorTC(operand)).map(Always(anchor, witness, _))
+    case Since(anchor, witness, left, right) =>
+      for l <- tailcall(mirrorTC(left)); r <- tailcall(mirrorTC(right)) yield Until(anchor, witness, l, r)
+    case Next(anchor, witness, operand)         => tailcall(mirrorTC(operand)).map(Previous(anchor, witness, _))
+    case Eventually(anchor, witness, operand)   => tailcall(mirrorTC(operand)).map(Once(anchor, witness, _))
+    case Always(anchor, witness, operand)       => tailcall(mirrorTC(operand)).map(Historically(anchor, witness, _))
+    case Until(anchor, witness, left, right) =>
+      for l <- tailcall(mirrorTC(left)); r <- tailcall(mirrorTC(right)) yield Since(anchor, witness, l, r)
+
+  /** `operands.map(mirrorTC)`, sequenced through the trampoline instead of
+    * a plain `List.map` — both the per-element `mirrorTC` call *and* the
+    * recursion into `tail` go through `tailcall`, so neither a deeply
+    * nested operand nor a very long flat operand list can grow the JVM
+    * stack.
+    */
+  private def mirrorAllTC(operands: List[Formula]): TailRec[List[Formula]] = operands match
+    case Nil          => done(Nil)
+    case head :: tail => for h <- tailcall(mirrorTC(head)); t <- tailcall(mirrorAllTC(tail)) yield h :: t
 
   def mirrorDag(past: FormulaDag): FormulaDag =
     if past.logic != Logic.PastStrict then throw LtlError("mirror_dag expects a strict-past 2LTL DAG")
