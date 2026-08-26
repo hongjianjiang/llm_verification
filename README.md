@@ -88,6 +88,25 @@ java -jar $JAR examples/brasp/last_a.brasp --run-native-conflict
 java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native-conflict --native-max-states 2000000
 ```
 
+`--run-auto` picks between `--run-native` and `--run-abc` automatically
+instead of requiring the choice up front: it tries `BooleanAutomaton.reachable`
+first, within the usual `--native-max-states` budget, and only if that's
+truncated does it fall back to `Aiger.generateSafetyAuto` + ABC `pdr` (a note
+is printed to stderr when this happens). The two backends fail in unrelated
+ways — native's cost tracks reachable-state count, Aiger's tracks
+`checkSupportSize`'s local/aggregate Boolean-summary support — so trying the
+cheaper, external-process-free one first is never wasted work, only
+sometimes unnecessary. It does *not* consider `--direct`: that backend needs
+determinization to be the actual bottleneck (not just "native's bounded
+search didn't finish"), and fixing its own model up for an external solver
+you haven't chosen to run isn't this flag's job — reach for `--direct`
+by hand instead, per its own section below.
+
+```sh
+java -jar $JAR examples/brasp/last_a.brasp --run-auto
+java -jar $JAR examples/brasp/last_a.brasp --run-auto --native-max-states 1  # forces escalation to ABC
+```
+
 ### Direct/non-determinized BTOR2 output (`--direct`)
 
 `--aiger`/`--run-native` both build on `BooleanAutomaton`, which
@@ -110,17 +129,19 @@ formula to hold — exactly a model checker's job, no subset construction
 needed). Sloth's automata have no second ("pebble") position, though, so
 resolving `Goto` — this project's own addition, needed for the two-variable
 `f@i`/`f@j` formulas `Pvwaa` compiles — is this backend's own contribution:
-it resolves against the pebble's *original* anchor symbol, frozen the
-moment the referencing state was first activated, rather than becoming
-another guess.
+it resolves against the symbol under the referencing state's *own* pebble,
+captured by a per-state `root` register the moment that state's obligation
+was last armed, rather than becoming another guess.
 
-That resolution is only implemented (and only checked, by
-`DirectPvwaa.checkGotoTargetsAreSimple`, before ever emitting anything) for
-goto-targets that are themselves symbol-constant, with no `Carry`/`Leave`
-of their own — true for every `Once`/`Hist`/`Yst`/`Since`-over-symbol-atoms
-formula this project's own generators produce, but not for a formula with
-one `Until` nested inside another `Until`'s operand (e.g. `at_least_two_a`'s
-`Hist`-based construction) — those still need the determinized `--aiger`/`--run-abc` path.
+Goto-targets with `Carry`/`Leave` structure of their own — a formula with
+one `Until` nested inside another `Until`'s operand, e.g.
+`at_least_two_a`'s `Hist`-based construction — are handled too, which is
+what the per-state `root` register (rather than one globally frozen first
+symbol) buys. Soundness there rests on one empirical fact rather than a
+proof: that no state is ever needed relative to two different,
+simultaneously-live pebbles at once. `tools.GotoOverlapCheck` is what
+checks it, per formula, against `Pvwaa.accepts` directly — run it before
+trusting this backend on a formula shape it hasn't seen.
 
 Where it applies, the resulting model is dramatically smaller and faster to
 check than every other backend on the same input: `same_letter_before` at
@@ -135,19 +156,45 @@ java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --direct 
 /Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
 ```
 
-There is no AIGER/ABC sibling of this backend: on the `dot_depth` family,
-the same non-determinized construction encoded to AIGER and run through
-ABC's `pdr` scales far worse with formula depth than the determinized
-`--aiger`/`--run-abc` path (times out well before `--run-abc` does), so it
-isn't wired up here — where `--direct` applies, stick with its BTOR2 output
-(fed to rIC3 by hand); elsewhere, use `--aiger`/`--run-abc`.
+#### AIGER/ABC sibling (`--direct --run-abc`)
+
+Adding `--run-abc` to `--direct` encodes *the same non-determinized
+construction* to AIGER instead (`Aiger.generateSafetyDirect`) and runs ABC's
+`pdr` on it in-process — no external solver, no BTOR2 file to hand over.
+`--subset` / `--equivalent` pick what it checks, same as everywhere else.
+There is no `--direct --aiger`: that model exists only to be checked, and
+plain `--direct` is how you get one to hand to an external solver.
+
+```sh
+java -jar $JAR examples/brasp/at_least_two_a.brasp --direct --run-abc
+java -jar $JAR --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp --direct --run-abc
+```
+
+Two things to know before reaching for it.
+
+It is *slower than the determinized path on deep formulas*, which is why it
+stayed unwired for a long time. Measured on `dot_depth` (this encoding, ABC
+`pdr`, same machine): k=8 is a wash at ~0.6s either way, k=100 is 3.6s
+against `--run-abc`'s 1.0s, and k=200 is 22.6s against 1.2s — diverging, not
+a constant factor. Its advantage is the one `--direct` has generally: the
+alphabet. Use it where determinization is the bottleneck, not where depth
+is.
+
+It is exactly as sound as `--direct` itself, and no more: it inherits the
+same one-root-register-per-state assumption, checked empirically by
+`tools.GotoOverlapCheck` rather than proven (see the `--direct` section
+above). Unlike the determinized AIGER encoders it does accept
+non-power-of-two alphabets — where they have no way to express BTOR2's
+`constraint` line and reject the input, this one adds a sticky
+out-of-range latch that blocks acceptance on any trace reading a bit
+pattern outside the alphabet.
 
 ### ABC backend (`--aiger`, `--run-abc`)
 
 [ABC](https://github.com/berkeley-abc/abc)'s `pdr` (Property Directed
-Reachability, i.e. IC3) is the only backend in this project that runs a
-solver automatically — `--direct` only ever
-prints a model for you to check with an external tool by hand. `--aiger`
+Reachability, i.e. IC3) is the only solver this project runs automatically —
+plain `--direct` (without `--run-abc`) only ever prints a BTOR2 model for you
+to check with an external tool by hand. `--aiger`
 prints the model, `--run-abc` runs ABC on it directly (implies `--aiger`);
 `--subset`/`--equivalent` still pick *what* it checks, same as every other
 backend.

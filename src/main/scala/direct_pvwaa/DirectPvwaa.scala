@@ -74,6 +74,22 @@ object DirectPvwaa:
   private def symbolWidth(alphabetSize: Int): Int =
     if alphabetSize <= 1 then 1 else 32 - Integer.numberOfLeadingZeros(alphabetSize - 1)
 
+  /** Whether `f` reaches a `Goto` atom without crossing a `Carry`/`Leave`
+    * one — i.e. whether the owning state's own pebble is ever consulted
+    * within a single step, and so needs a `root` register to remember the
+    * symbol under it. Shared with `Aiger.generateSafetyDirect`, which
+    * bit-blasts this same construction: the two encodings must agree on
+    * *which* states get a root, or they would be encoding different
+    * automata.
+    */
+  private[brasp] def containsGoto(f: PositiveFormula): Boolean = f match
+    case PositiveFormula.PositiveConstant(_)                            => false
+    case _: PositiveFormula.SymbolTest                                  => false
+    case PositiveFormula.PositiveAnd(operands)                          => operands.exists(containsGoto)
+    case PositiveFormula.PositiveOr(operands)                           => operands.exists(containsGoto)
+    case PositiveFormula.TransitionAtom(_, Action.Goto)                 => true
+    case PositiveFormula.TransitionAtom(_, Action.Carry | Action.Leave) => false
+
   /** Whether the empty word is accepted — a compile-time constant (mirrors
     * `Pvwaa.accepts`'s own `head == length` base case at `length == 0`),
     * computed statically rather than by asking the solver.
@@ -171,13 +187,6 @@ object DirectPvwaa:
     // forcing every `Goto`/`Carry` reference to strictly decreasing rank,
     // plus a `rightmost` witness search committing to at most one
     // candidate witness at a time along any real accepting continuation.
-    def containsGoto(f: PositiveFormula): Boolean = f match
-      case PositiveFormula.PositiveConstant(_)                            => false
-      case _: PositiveFormula.SymbolTest                                  => false
-      case PositiveFormula.PositiveAnd(operands)                          => operands.exists(containsGoto)
-      case PositiveFormula.PositiveOr(operands)                           => operands.exists(containsGoto)
-      case PositiveFormula.TransitionAtom(_, Action.Goto)                 => true
-      case PositiveFormula.TransitionAtom(_, Action.Carry | Action.Leave) => false
     val needsRoot = states.filter(state => containsGoto(automaton.transitions(state)))
 
     val rootOf = needsRoot.map(state => state -> b.emit(s"state $sortSymbol root_$state")).toMap

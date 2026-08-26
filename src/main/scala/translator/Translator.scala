@@ -20,8 +20,10 @@ final case class CliArgs(
     equivalent: Option[File] = None,
     runNative: Boolean = false,
     runNativeConflict: Boolean = false,
+    runAuto: Boolean = false,
     nativeMaxStates: Int = 4096,
     direct: Boolean = false,
+    oneVariable: Boolean = false,
     aiger: Boolean = false,
     aigerMaxStates: Int = 4096,
     runAbc: Boolean = false,
@@ -63,8 +65,10 @@ object Translator:
     var equivalent: Option[File] = None
     var runNative = false
     var runNativeConflict = false
+    var runAuto = false
     var nativeMaxStates = 4096
     var directOut = false
+    var oneVariable = false
     var aigerOut = false
     var aigerMaxStates = 4096
     var runAbc = false
@@ -90,10 +94,12 @@ object Translator:
         case "--equivalent"         => equivalent = Some(File(takeValue("--equivalent", it)))
         case "--run-native"         => runNative = true
         case "--run-native-conflict" => runNativeConflict = true
+        case "--run-auto"           => runAuto = true
         case "--native-max-states"  =>
           val raw = takeValue("--native-max-states", it)
           nativeMaxStates = raw.toIntOption.getOrElse(fail(s"argument --native-max-states: expected an integer, got '$raw'"))
         case "--direct"             => directOut = true
+        case "--one-variable"       => oneVariable = true
         case "--aiger"              => aigerOut = true
         case "--aiger-max-states"   =>
           val raw = takeValue("--aiger-max-states", it)
@@ -121,8 +127,10 @@ object Translator:
       equivalent = equivalent,
       runNative = runNative,
       runNativeConflict = runNativeConflict,
+      runAuto = runAuto,
       nativeMaxStates = nativeMaxStates,
       direct = directOut,
+      oneVariable = oneVariable,
       aiger = aigerOut,
       aigerMaxStates = aigerMaxStates,
       runAbc = runAbc,
@@ -278,6 +286,25 @@ object Translator:
   def conflictSummary(result: BooleanAutomaton.ConflictResult, goal: String, emptyBad: Boolean): String =
     renderVerdict("brasp-native-conflict", result.truncated, result.statesVisited, result.witness, goal, emptyBad)
 
+  /** Encode `automaton` to AIGER (`Aiger.generateSafetyAuto`, itself already
+    * tiered: quick DFA attempt, then explicit table, then full-budget DFA)
+    * and run ABC's `pdr` on it, printing `Abc.summarize`'s verdict. Shared
+    * by `--run-abc` and `--run-auto`'s escalation path — both end up
+    * needing exactly this, the only difference being what runs first.
+    */
+  private def runAbcBackend(automaton: ReverseBooleanAutomaton, parsed: CliArgs, goal: String, emptyBad: Boolean): Int =
+    val model =
+      try Aiger.generateSafetyAuto(automaton, parsed.aigerMaxStates)
+      catch
+        case AigerError(message) =>
+          System.err.println(s"translator: $message")
+          return 2
+    try Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
+    catch
+      case AbcError(message) =>
+        System.err.println(s"translator: $message")
+        2
+
   /** Split `--word` text into symbols: whitespace-separated if it contains
     * whitespace (for multi-character symbols), otherwise one symbol per
     * character (for the common single-character-alphabet case) — unless
@@ -312,6 +339,16 @@ object Translator:
     if parsed.subset.isDefined && parsed.equivalent.isDefined then
       System.err.println("translator: error: choose only one of --subset or --equivalent")
       return 2
+    // Rejected rather than silently ignoring one of the two: the
+    // non-determinized AIGER encoding exists only to be handed to ABC, so
+    // there is no sensible model for `--direct --aiger` to print — and
+    // quietly emitting the *determinized* one instead would be worse.
+    if parsed.direct && parsed.aiger then
+      System.err.println(
+        "translator: error: --direct has no --aiger form; use --direct --run-abc to check the " +
+          "non-determinized model with ABC, or plain --direct for a BTOR2 model to hand to an external solver"
+      )
+      return 2
     val compiled: CompileResult =
       try
         val translated: FormulaDag =
@@ -329,18 +366,39 @@ object Translator:
               BraspToLtl.translateProgram(Inclusion.equivalenceCounterexampleProgram(inputProgram, loadProgram(parsed.equivalent.get)))
             else BraspToLtl.translateProgram(inputProgram)
 
+        // `--direct` wins over `--run-abc`: that flag asks for a solver run,
+        // not specifically for the determinized encoding, so combining the
+        // two means "check the non-determinized model with ABC"
+        // (`Aiger.generateSafetyDirect`). It does *not* win over `--aiger`:
+        // the non-determinized AIGER model is only ever produced to be
+        // checked, never printed — plain `--direct` is how you get a model
+        // to hand to an external solver, and it emits BTOR2 for that.
+        // Every other Boolean-automaton consumer below has no `--direct`
+        // counterpart at all.
+        // The classical baseline: compile the second variable away first,
+        // paying the exponential up front, and hand the backends an ordinary
+        // one-variable formula (hence a VWAA, with no goto atoms).
+        val compiled0 =
+          if parsed.oneVariable then
+            try TwoLtlToOneVariable.translate(translated)
+            catch
+              case TwoLtlToOneVariable.TranslationTooLarge(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          else translated
+
         val needsBooleanAutomaton =
-          parsed.subset.isDefined || parsed.equivalent.isDefined ||
-            parsed.booleanAutomaton ||
-            parsed.runNative || parsed.runNativeConflict || parsed.aiger || parsed.runAbc
+          parsed.booleanAutomaton ||
+            parsed.runNative || parsed.runNativeConflict || parsed.runAuto || parsed.aiger ||
+            ((parsed.subset.isDefined || parsed.equivalent.isDefined || parsed.runAbc) && !parsed.direct)
         if needsBooleanAutomaton then
-          CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(translated))))
+          CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(compiled0))))
         else if parsed.pvwaa || parsed.direct then
-          CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(translated)))
+          CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(compiled0)))
         else if parsed.future then
-          CompileResult.Dag(mirrorToFuture(translated))
+          CompileResult.Dag(mirrorToFuture(compiled0))
         else
-          CompileResult.Dag(translated)
+          CompileResult.Dag(compiled0)
       catch
         case error: java.io.IOException =>
           System.err.println(s"translator: ${error.getMessage}")
@@ -401,23 +459,55 @@ object Translator:
           val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
           val result = BooleanAutomaton.conflictWitness(automaton, parsed.nativeMaxStates)
           println(conflictSummary(result, goal, emptyBad))
+        else if parsed.runAuto then
+          val goal =
+            if parsed.subset.isDefined then "inclusion"
+            else if parsed.equivalent.isDefined then "equivalence"
+            else "safety"
+          val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+          // Native's cost tracks reachable-state count x alphabet size, not
+          // Aiger's local/aggregate Boolean-summary support size
+          // (`checkSupportSize`'s `maxLocalSupport`/`maxTotalWork`) — a
+          // genuinely different failure mode, so trying it first is never
+          // redundant with the ABC fallback below, only ever cheaper when
+          // it happens to finish.
+          //
+          // The budget for that first try is deliberately *not*
+          // `parsed.nativeMaxStates`: a reachable-state space can sit
+          // entirely under that cap (so `reachable` never truncates) while
+          // still being expensive per state, if the alphabet is large — the
+          // very case `Aiger.generateSafetyAuto`'s own `quickDfaWork`
+          // budget exists to avoid on the Aiger side (see its doc-comment).
+          // `dot_depth k=1600` is the measured example: `reachable` finds a
+          // witness within 4096 states (never truncates) but takes ~73s
+          // doing it, against ABC's ~8s on the same formula via the
+          // minimized+`scleanup`/`dc2`'d encoding. Capping the first
+          // attempt the same way keeps this flag's whole point — try the
+          // cheap thing first — actually cheap, and lets a slow-but-would
+          // -eventually-finish native run get out of its own way instead of
+          // silently costing more wall-clock time than escalating would
+          // have.
+          val quickBudget = math.min(parsed.nativeMaxStates, Aiger.quickDfaWork / math.max(1, automaton.source.alphabet.length))
+          val quickDfa = if quickBudget > 0 then Some(BooleanAutomaton.reachable(automaton, quickBudget)).filterNot(_.truncated) else None
+          quickDfa match
+            case Some(dfa) => println(nativeSummary(dfa, automaton.source.alphabet, goal, emptyBad))
+            case None =>
+              System.err.println(
+                s"translator: --run-auto: native reachability search did not finish within a quick $quickBudget-state budget; escalating to ABC pdr"
+              )
+              return runAbcBackend(automaton, parsed, goal, emptyBad)
         else if parsed.runAbc || parsed.aiger then
           val goal =
             if parsed.subset.isDefined then "inclusion"
             else if parsed.equivalent.isDefined then "equivalence"
             else "safety"
+          if parsed.runAbc then
+            val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+            return runAbcBackend(automaton, parsed, goal, emptyBad)
           val model =
             try Aiger.generateSafetyAuto(automaton, parsed.aigerMaxStates)
             catch
               case AigerError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          if parsed.runAbc then
-            try
-              val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
-              return Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
-            catch
-              case AbcError(message) =>
                 System.err.println(s"translator: $message")
                 return 2
           System.out.write(model)
@@ -428,7 +518,31 @@ object Translator:
             case None       => ()
           println(if parsed.json then Json.render(BooleanAutomaton.toJson(automaton)) else BooleanAutomaton.render(automaton))
       case CompileResult.PvwaaResult(automaton) =>
-        if parsed.direct then
+        if parsed.direct && parsed.runAbc then
+          // The non-determinized model through the ABC backend: same
+          // construction as the BTOR2 branch below, bit-blasted. `emptyBad`
+          // is `DirectPvwaa`'s own compile-time empty-word answer, not
+          // `BooleanAutomaton.diagonal`'s — there is no Boolean automaton
+          // on this path.
+          val goal =
+            if parsed.subset.isDefined then "inclusion"
+            else if parsed.equivalent.isDefined then "equivalence"
+            else "safety"
+          val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
+          val model =
+            try Aiger.generateSafetyDirect(automaton)
+            catch
+              case AigerError(message) =>
+                System.err.println(s"translator: $message")
+                return 2
+          return (
+            try Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
+            catch
+              case AbcError(message) =>
+                System.err.println(s"translator: $message")
+                2
+          )
+        else if parsed.direct then
           val model =
             try DirectPvwaa.generateSafety(automaton)
             catch

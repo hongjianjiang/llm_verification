@@ -15,5 +15,6 @@ logs/
 .vscode/
 *.iml
 docs/
+iclr/
 # OS
 .DS_Store

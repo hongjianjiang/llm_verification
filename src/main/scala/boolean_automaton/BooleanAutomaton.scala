@@ -56,6 +56,16 @@ final case class ReverseBooleanAutomaton(
     supportIndex: Map[String, Map[String, Int]],
     bddManager: Bdd.Manager,
     initial: BooleanSummary,
+    /** `BooleanAutomaton.symbolDeterminedStates(source)`, and the diagonal
+      * values those states take --- one map per alphabet symbol, plus the
+      * initial summary's. Precomputed here rather than per query: both are
+      * whole-automaton fixpoints, and `realizableAbstractions` is called once
+      * per state by the encoder and again by `checkSupportSize`, which made
+      * recomputing them quadratic in `|states|` (measured: `dot_depth` at
+      * `k=800` went from seconds to well past a 20s budget).
+      */
+    symbolDetermined: Set[String],
+    pinnedDiagonals: Vector[Map[String, Boolean]],
 )
 
 /** The concrete, finite deterministic automaton reachable from `initial` by
@@ -193,11 +203,14 @@ object BooleanAutomaton:
   private val maxTotalWork = BigInt(500_000)
 
   def checkSupportSize(automaton: ReverseBooleanAutomaton): Unit =
-    for (state, deps) <- automaton.support if deps.length > maxLocalSupport do
-      throw PVWAAError(
-        s"state '$state' depends on ${deps.length} other goto-support states, exceeding this backend's per-state limit of $maxLocalSupport " +
-          s"(its Boolean-summary table would need 2^${deps.length} entries) — the automaton's goto/leave dependency structure is too tangled for this encoding"
-      )
+    val cellLimit = BigInt(2).pow(maxLocalSupport)
+    for state <- automaton.source.states do
+      val cells = realizableAbstractionCount(automaton, state)
+      if cells > cellLimit then
+        throw PVWAAError(
+          s"state '$state' needs $cells Boolean-summary cells (from a local support of ${automaton.support(state).length}), exceeding this backend's " +
+            s"per-state limit of 2^$maxLocalSupport — the automaton's goto/leave dependency structure is too tangled for this encoding"
+        )
     val cells = totalCells(automaton)
     val totalWork = cells * automaton.source.alphabet.length
     if totalWork > maxTotalWork then
@@ -219,7 +232,14 @@ object BooleanAutomaton:
     val initial = BooleanSummary(
       automaton.states.map(state => state -> (if automaton.finalStates.contains(state) then Bdd.True else Bdd.False)).toMap
     )
-    ReverseBooleanAutomaton(automaton, gotoSupport, support, supportIndex, bddManager, initial)
+    val symbolDetermined = symbolDeterminedStates(automaton)
+    val pinnedDiagonals =
+      val perSymbol = automaton.alphabet.map(sym =>
+        gotoSupport.filter(symbolDetermined).map(state => state -> symbolDeterminedValue(automaton, state, sym)).toMap
+      )
+      val atInitial = gotoSupport.filter(symbolDetermined).map(state => state -> automaton.finalStates.contains(state)).toMap
+      (perSymbol :+ atInitial).toVector
+    ReverseBooleanAutomaton(automaton, gotoSupport, support, supportIndex, bddManager, initial, symbolDetermined, pinnedDiagonals)
 
   /** Solve `V(q) = S(q, V|G)` bottom-up along the very-weak order. */
   def diagonal(automaton: ReverseBooleanAutomaton, summary: BooleanSummary): Map[String, Boolean] =
@@ -273,8 +293,106 @@ object BooleanAutomaton:
     * summary table — the size of the (never-materialized) full
     * Boolean-summary state space is `2` to this power.
     */
+  /** States whose *diagonal* value at a position is a function of the symbol
+    * at that position alone: their transition formula is built from
+    * constants, symbol tests, and `goto` atoms whose targets are themselves
+    * symbol-determined. `carry` and `leave` break the property, since both
+    * consult a neighbouring position and so carry history.
+    *
+    * Computed as a greatest fixpoint over the very-weak order, which
+    * terminates because `goto` atoms strictly descend it.
+    */
+  def symbolDeterminedStates(automaton: ForwardPVWAA): Set[String] =
+    def classify(formula: PositiveFormula, sd: Set[String]): Boolean = formula match
+      case PositiveFormula.PositiveConstant(_)               => true
+      case _: PositiveFormula.SymbolTest                     => true
+      case PositiveFormula.PositiveAnd(operands)             => operands.forall(classify(_, sd))
+      case PositiveFormula.PositiveOr(operands)              => operands.forall(classify(_, sd))
+      case PositiveFormula.TransitionAtom(target, Action.Goto) => sd.contains(target)
+      case PositiveFormula.TransitionAtom(_, _)              => false
+    var sd = automaton.states.toSet
+    var changed = true
+    while changed do
+      changed = false
+      for state <- automaton.states if sd.contains(state) && !classify(automaton.transitions(state), sd) do
+        sd -= state
+        changed = true
+    sd
+
+  /** The diagonal value of a symbol-determined state under `symbol`, i.e.
+    * `V(state)` at any position carrying that symbol (see
+    * `symbolDeterminedStates`).
+    */
+  private def symbolDeterminedValue(automaton: ForwardPVWAA, state: String, symbol: String): Boolean =
+    def eval(formula: PositiveFormula): Boolean = formula match
+      case PositiveFormula.PositiveConstant(value)              => value
+      case PositiveFormula.SymbolTest(kind, sym, dual)          => Ltl.symbolMatches(kind, sym, symbol) != dual
+      case PositiveFormula.PositiveAnd(operands)                => operands.forall(eval)
+      case PositiveFormula.PositiveOr(operands)                 => operands.exists(eval)
+      case PositiveFormula.TransitionAtom(target, Action.Goto)  => eval(automaton.transitions(target))
+      case PositiveFormula.TransitionAtom(target, action)       =>
+        throw PVWAAError(s"symbolDeterminedValue: '$state' reaches a $action atom on '$target'")
+    eval(automaton.transitions(state))
+
+  /** The pebble abstractions of `state` that can actually arise.
+    *
+    * A summary is only ever consulted at a restriction of some diagonal
+    * (\S9's invariant), so the `2^|support|` cells of the explicit encoding
+    * are a syntactic over-count. On the symbol-determined part of the
+    * support the diagonal is pinned by a single symbol, which leaves
+    * `|alphabet| + 1` possibilities there (one per letter, plus the
+    * all-final vector of the initial summary) instead of `2^k`; the rest of
+    * the support is still enumerated in full.
+    *
+    * The pay-off is families whose goto-support consists of symbol
+    * predicates, where the predicates are mutually exclusive and the
+    * syntactic count is exponentially pessimistic: `monotone_past` at
+    * `sigma` has a state of local support `sigma - 1`, i.e. `2^(sigma-1)`
+    * cells syntactically, against `sigma + 1` realizable ones.
+    *
+    * Returned in a fixed order, deduplicated, and closed under restriction:
+    * the abstractions of a `leave` target are exactly the projections of
+    * this state's, which is what lets `Aiger`'s projection stay well
+    * defined.
+    */
+  private def pinnedAndFree(
+      automaton: ReverseBooleanAutomaton,
+      state: String,
+  ): (List[(String, Int)], List[(String, Int)], List[List[Boolean]]) =
+    val deps = automaton.support(state)
+    val (pinned, free) = deps.zipWithIndex.partition((dep, _) => automaton.symbolDetermined.contains(dep))
+    val vectors = automaton.pinnedDiagonals.map(diagonal => pinned.map((dep, _) => diagonal(dep))).distinct.toList
+    (pinned, free, vectors)
+
+  /** How many cells `realizableAbstractions` would return, without building
+    * them. `checkSupportSize` calls this on every state *before* the encoder
+    * runs, so it must stay cheap even when the free part is astronomically
+    * large --- materializing `2^|free|` vectors merely to count them is how
+    * this ran a 30-dependency hub state out of heap.
+    */
+  def realizableAbstractionCount(automaton: ReverseBooleanAutomaton, state: String): BigInt =
+    val (_, free, pinnedVectors) = pinnedAndFree(automaton, state)
+    BigInt(pinnedVectors.length) * BigInt(2).pow(free.length)
+
+  def realizableAbstractions(automaton: ReverseBooleanAutomaton, state: String): Vector[Vector[Boolean]] =
+    val deps = automaton.support(state)
+    val (pinned, free, pinnedVectors) = pinnedAndFree(automaton, state)
+    val freeVectors =
+      if free.isEmpty then Vector(Vector.empty[Boolean])
+      else (0 until (1 << free.length)).map(i => (free.length - 1 to 0 by -1).map(bit => ((i >> bit) & 1) == 1).toVector).toVector
+    val result =
+      for
+        pinnedBits <- pinnedVectors.toVector
+        freeBits <- freeVectors
+      yield
+        val slots = Array.fill(deps.length)(false)
+        for ((_, position), k) <- pinned.zipWithIndex do slots(position) = pinnedBits(k)
+        for ((_, position), k) <- free.zipWithIndex do slots(position) = freeBits(k)
+        slots.toVector
+    result.distinct
+
   private def totalCells(automaton: ReverseBooleanAutomaton): BigInt =
-    automaton.source.states.map(state => BigInt(2).pow(automaton.support(state).length)).sum
+    automaton.source.states.map(state => realizableAbstractionCount(automaton, state)).sum
 
   /** `2^cells` as a *string*, never as a materialized `BigInt` — `cells`
     * itself can legitimately reach into the millions for the exact formulas
