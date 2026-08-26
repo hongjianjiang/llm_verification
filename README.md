@@ -1,10 +1,8 @@
 # B-RASP verification
 
-Compiles a Boolean B-RASP program through 2LTL → PVWAA → a Boolean-summary
-automaton → a binary AIGER model, checked in-process by ABC (or, via the
-non-determinized `--direct` backend, a BTOR2 model printed for you to feed
-to an external solver such as rIC3 by hand). Can check inclusion /
-equivalence between two programs either way.
+Compiles a Boolean B-RASP program through 2LTL → PVWAA → an automaton, and
+checks nonemptiness by either of two routes (see below). Can check inclusion
+/ equivalence between two programs either way.
 
 ## Build
 
@@ -16,6 +14,30 @@ JAR=target/scala-3.5.1/brasp-verification.jar
 Use the jar (not `sbt run`) for anything you redirect or pipe — sbt prefixes
 every line with its own logging, which corrupts captured output.
 
+## The two routes
+
+These are the two routes the paper compares. Both answer the same
+nonemptiness question and print the same `PROVED` / `NOT PROVED` / `UNKNOWN`
+verdict.
+
+**`1LTL`** — the classical route. Eliminate the second variable in the logic,
+then build the automaton explicitly:
+
+```bash
+java -jar $JAR examples/ltl/dot_depth__k-800__sigma-2.ltl --one-variable --run-native --native-max-states 50000000
+```
+
+**`ABC`** — keep the pebble, compile to a circuit, model-check it:
+
+```bash
+java -jar $JAR examples/ltl/dot_depth__k-800__sigma-2.ltl --run-abc
+```
+
+`1LTL` fails in two distinguishable ways: it reports the one-variable
+translation blowing past its size cap (on genuinely two-variable formulas, no
+automaton is ever built), or it exhausts `--native-max-states`. `ABC` needs
+the `abc` binary — `../abc/abc` by default, or `--abc-bin PATH`.
+
 ## CLI flags
 
 | Flag | Output |
@@ -24,8 +46,8 @@ every line with its own logging, which corrupts captured output.
 | `--future` | strict-future 2LTL (mirrored, evaluated on `reverse(w)`) |
 | `--pvwaa` | forward pebble VWAA |
 | `--boolean-automaton` | Boolean-summary automaton (reverses the PVWAA) |
-| `--subset SUPERSET INPUT` | goal: `L(INPUT) ⊆ L(SUPERSET)` (any backend below) |
-| `--equivalent OTHER INPUT` | goal: `L(INPUT) = L(OTHER)` (any backend below) |
+| `--subset SUPERSET INPUT` | goal: `L(INPUT) ⊆ L(SUPERSET)` (either route above) |
+| `--equivalent OTHER INPUT` | goal: `L(INPUT) = L(OTHER)` (either route above) |
 | `--aiger` | binary AIGER model of the Boolean-summary automaton (ABC backend) |
 | `--brasp` | 2LTL back into a B-RASP program |
 | `--ltl` | compiled formula in `.ltl` text syntax |
@@ -41,220 +63,6 @@ stem>_pvwaa.dot`, `graphs/<input stem>_boolean_automaton.dot`,
 needed. Note the last one can collide with a hand-written example source of
 the same input stem (e.g. `at_least_two_a`), in which case the round-tripped
 `--brasp` output overwrites it.
-
-### Native backend (`--run-native`)
-
-`--run-native` answers the same plain-safety/subset/equivalence question as
-`--run-abc`, but entirely in-process: it runs
-`BooleanAutomaton.reachable` directly and checks whether any accepting
-state is reachable, with no AIGER model and no external solver at
-all. It exists because, for some formula families, the *smallest correct*
-AIGER model this backend can build (the compact reachable-DFA
-encoding described below) doesn't actually help an external IC3/PDR solver: a
-minimized DFA's transition table, bit-blasted, is a lookup with no
-exploitable structure, so a solver can end up *slower* on it than on the
-naive per-state encoding, or even crash parsing a large enough table.
-Skipping the encoding step altogether and asking `reachable` the question
-directly avoids both problems — it costs exactly the BFS exploration this
-backend was already going to do internally, no more.
-
-`--native-max-states N` (default 4096, same default as
-`--aiger-max-states`) caps the exploration; hitting it reports `UNKNOWN`
-rather than guessing. Unlike `--aiger`, there is no non-`--run-`
-form — this backend only ever answers the question, it never emits a
-model — and no raw-output mode, since there is no external tool's stdout
-to show. The empty-word case is reported the same "compile-time constant"
-way as the other backends'.
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-native
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native --native-max-states 2000000
-```
-
-`--run-native-conflict` answers the same question via
-`BooleanAutomaton.conflictWitness` instead of `reachable` — a DFS that
-stops as soon as it finds a bad-prefix witness rather than materializing
-the whole reachable DFA, and dedupes/cycle-detects states by their
-projection onto only the formula's "relevant" states (a genuine
-bisimulation w.r.t. the accept condition — see `conflictWitness`'s
-doc-comment) instead of the full Boolean-summary table. That makes it the
-optimized alternative to `--run-native`: cheaper whenever you only need a
-witness or a PROVED/NOT PROVED/UNKNOWN verdict, not the full DFA. It
-shares `--native-max-states` with `--run-native` and reports the same
-three-way verdict shape (labeled `brasp-native-conflict`).
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-native-conflict
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-14.ltl --run-native-conflict --native-max-states 2000000
-```
-
-`--run-auto` picks between `--run-native` and `--run-abc` automatically
-instead of requiring the choice up front: it tries `BooleanAutomaton.reachable`
-first, within the usual `--native-max-states` budget, and only if that's
-truncated does it fall back to `Aiger.generateSafetyAuto` + ABC `pdr` (a note
-is printed to stderr when this happens). The two backends fail in unrelated
-ways — native's cost tracks reachable-state count, Aiger's tracks
-`checkSupportSize`'s local/aggregate Boolean-summary support — so trying the
-cheaper, external-process-free one first is never wasted work, only
-sometimes unnecessary. It does *not* consider `--direct`: that backend needs
-determinization to be the actual bottleneck (not just "native's bounded
-search didn't finish"), and fixing its own model up for an external solver
-you haven't chosen to run isn't this flag's job — reach for `--direct`
-by hand instead, per its own section below.
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-auto
-java -jar $JAR examples/brasp/last_a.brasp --run-auto --native-max-states 1  # forces escalation to ABC
-```
-
-### Direct/non-determinized BTOR2 output (`--direct`)
-
-`--aiger`/`--run-native` both build on `BooleanAutomaton`, which
-*determinizes* the PVWAA first (a Miyano-Hayashi-style subset construction
-over Boolean-summary functions) before emitting hardware or exploring
-reachability. For a handful of `two_var` formula families
-(`same_letter_before`, `since_same_letter`) that determinization step
-itself is exponential in the alphabet size — `checkSupportSize` already
-rejects sigma=15+ outright, and `--run-native`'s own reachable-state
-enumeration hits the same wall a bit later, just as expensively.
-
-`--direct` skips determinization entirely: it encodes the
-*forward PVWAA* (the alternating automaton `Pvwaa.fromFuture2ltl` produces,
-before `BooleanAutomaton` ever touches it) straight to BTOR2, one Boolean
-register per PVWAA state — the same trick the string solver
-[Sloth](https://github.com/uuverifiers/sloth) uses for its own alternating
-automata (`Carry`/`Leave` references become a freshly *guessed* Boolean
-input, validated one step later by requiring the state's own transition
-formula to hold — exactly a model checker's job, no subset construction
-needed). Sloth's automata have no second ("pebble") position, though, so
-resolving `Goto` — this project's own addition, needed for the two-variable
-`f@i`/`f@j` formulas `Pvwaa` compiles — is this backend's own contribution:
-it resolves against the symbol under the referencing state's *own* pebble,
-captured by a per-state `root` register the moment that state's obligation
-was last armed, rather than becoming another guess.
-
-Goto-targets with `Carry`/`Leave` structure of their own — a formula with
-one `Until` nested inside another `Until`'s operand, e.g.
-`at_least_two_a`'s `Hist`-based construction — are handled too, which is
-what the per-state `root` register (rather than one globally frozen first
-symbol) buys. Soundness there rests on one empirical fact rather than a
-proof: that no state is ever needed relative to two different,
-simultaneously-live pebbles at once. `tools.GotoOverlapCheck` is what
-checks it, per formula, against `Pvwaa.accepts` directly — run it before
-trusting this backend on a formula shape it hasn't seen.
-
-Where it applies, the resulting model is dramatically smaller and faster to
-check than every other backend on the same input: `same_letter_before` at
-sigma=16 fails outright on every other backend (`checkSupportSize`) or times
-out (`--run-native`); this model, checked with rIC3, solves it in under a
-second, and scales to sigma=256 in well under a minute.
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --direct > model.btor2
-/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --direct > model.btor2
-/Users/alexander/work/rIC3/target/release/ric3 check model.btor2 --cex ic3
-```
-
-#### AIGER/ABC sibling (`--direct --run-abc`)
-
-Adding `--run-abc` to `--direct` encodes *the same non-determinized
-construction* to AIGER instead (`Aiger.generateSafetyDirect`) and runs ABC's
-`pdr` on it in-process — no external solver, no BTOR2 file to hand over.
-`--subset` / `--equivalent` pick what it checks, same as everywhere else.
-There is no `--direct --aiger`: that model exists only to be checked, and
-plain `--direct` is how you get one to hand to an external solver.
-
-```sh
-java -jar $JAR examples/brasp/at_least_two_a.brasp --direct --run-abc
-java -jar $JAR --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp --direct --run-abc
-```
-
-Two things to know before reaching for it.
-
-It is *slower than the determinized path on deep formulas*, which is why it
-stayed unwired for a long time. Measured on `dot_depth` (this encoding, ABC
-`pdr`, same machine): k=8 is a wash at ~0.6s either way, k=100 is 3.6s
-against `--run-abc`'s 1.0s, and k=200 is 22.6s against 1.2s — diverging, not
-a constant factor. Its advantage is the one `--direct` has generally: the
-alphabet. Use it where determinization is the bottleneck, not where depth
-is.
-
-It is exactly as sound as `--direct` itself, and no more: it inherits the
-same one-root-register-per-state assumption, checked empirically by
-`tools.GotoOverlapCheck` rather than proven (see the `--direct` section
-above). Unlike the determinized AIGER encoders it does accept
-non-power-of-two alphabets — where they have no way to express BTOR2's
-`constraint` line and reject the input, this one adds a sticky
-out-of-range latch that blocks acceptance on any trace reading a bit
-pattern outside the alphabet.
-
-### ABC backend (`--aiger`, `--run-abc`)
-
-[ABC](https://github.com/berkeley-abc/abc)'s `pdr` (Property Directed
-Reachability, i.e. IC3) is the only solver this project runs automatically —
-plain `--direct` (without `--run-abc`) only ever prints a BTOR2 model for you
-to check with an external tool by hand. `--aiger`
-prints the model, `--run-abc` runs ABC on it directly (implies `--aiger`);
-`--subset`/`--equivalent` still pick *what* it checks, same as every other
-backend.
-
-| Flag | Effect |
-| --- | --- |
-| `--aiger` | print the binary AIGER model instead of the plain automaton |
-| `--aiger-max-states N` | reachable-state cap for the compact DFA encoding below (default 4096) |
-| `--run-abc` | run ABC's `pdr` on it and print a summary (implies `--aiger`) |
-| `--abc-bin PATH` | ABC executable (default `../abc/abc`, sibling to this repo) |
-| `--abc-raw` | print ABC's raw stdout instead of the summary |
-
-The AIGER model prefers a compact, minimized encoding: it first explores
-the automaton's *actually reachable* states (breadth-first, up to
-`--aiger-max-states`) and, if that exploration completes, minimizes
-the resulting DFA (`BooleanAutomaton.minimize`, exact Moore-style partition
-refinement — `reachable`'s own dedup is exact structural equality only, so
-this routinely merges away a further 30-95% of the states on real
-specifications) before emitting `ceil(log2(stateCount))` latches encoding the
-current state in binary, with a next-state lookup bit-blasted from
-`dfa.transitions` — its size tracks the real *minimized* reachable-state
-count, not the per-state Boolean-summary support size.
-If exploration is truncated instead, it falls back to the older direct
-encoding (one Boolean latch per summary cell, `bad` = "nonempty prefix
-accepted"). Either way every latch is canonicalized to physically reset to
-0 — the standard XOR-with-init trick for the summary-cell encoding, and for
-free for the DFA encoding since its state `0` is always the initial state —
-because this build's binary AIGER reader only supports that (pre-1.9, no
-explicit-reset-field) latch format. ABC's `&read` (its other, ASCII-capable
-AIGER reader) was tried first and rejected: it silently treats every latch
-as uninitialized regardless of what the file declares, giving wrong
-verdicts rather than an error, so `Abc.run` always goes through the classic
-`read_aiger` + `pdr` pipeline instead.
-
-`Abc.run`'s script always runs `scleanup; dc2` before `pdr`. It matters a
-lot on formula families with small per-state local support but a long
-syntactic chain (e.g. `dot_depth`): `checkSupportSize` passes trivially
-there, so `generateSafetyAuto` picks the explicit direct-table encoding
-without ever attempting the compact DFA one — leaving a lot of purely
-structural redundancy in the model. `scleanup` (structural sequential
-cleanup, no SAT/induction) and `dc2` (combinational don't-care-based
-resynthesis) are both cheap and clean most of that up before `pdr` ever
-sees it — measured on `dot_depth`: k=1600 went from 119.6s to 6.7s, and
-k=2400/k=3200 (previously timing out past 150s) now solve in 12.3s/16.6s.
-(`&scorr`, ABC's *sequential* redundancy checker, was tried first and
-rejected: it's itself SAT/induction-based and didn't finish in 60s on a
-16k-latch model — no cheaper than the `pdr` problem it would be
-preprocessing away.)
-
-Only power-of-two alphabets are supported either way — AIGER has no way to
-express a non-power-of-two symbol range (unlike a word-level format like
-BTOR2, which can add an explicit `constraint` line ruling out-of-range
-values).
-
-```sh
-java -jar $JAR examples/brasp/last_a.brasp --run-abc
-java -jar $JAR --run-abc --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
-java -jar $JAR examples/brasp/last_a.brasp --aiger > model.aig
-/Users/alexander/work/abc/abc -c "read_aiger model.aig; pdr; print_status"
-```
 
 ## Converting LTLf benchmarks (`Ltlf`, `LtlfBatch`)
 
