@@ -1,0 +1,8 @@
+alphabet a b
+
+f_0 = symbol b
+f_1 = symbol a
+f_2_since = rightmost(!(f_0@i & f_1@j) | !true, !(f_0@i & f_1@j))
+f_2 = !f_2_since
+
+output f_2

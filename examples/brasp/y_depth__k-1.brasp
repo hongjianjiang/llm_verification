@@ -1,0 +1,6 @@
+alphabet a b
+
+f_0 = symbol a
+f_1 = rightmost(f_0@j | !false, f_0@j)
+
+output f_1

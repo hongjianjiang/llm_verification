@@ -1,0 +1,14 @@
+alphabet marker a b c d e f g h
+
+f_0 = symbol a
+f_1 = symbol b
+f_2 = symbol c
+f_3 = symbol d
+f_4 = symbol e
+f_5 = symbol f
+f_6 = symbol g
+f_7 = symbol h
+f_8 = symbol marker
+f_9 = rightmost(f_8@j | !!(((((((!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & !(f_2@i & f_2@j)) & !(f_3@i & f_3@j)) & !(f_4@i & f_4@j)) & !(f_5@i & f_5@j)) & !(f_6@i & f_6@j)) & !(f_7@i & f_7@j)), f_8@j)
+
+output f_9

@@ -100,6 +100,57 @@ object LtlToBrasp:
         },
       )
 
+    /** A name not already taken by a definition, an earlier helper, or the
+      * synthetic output.
+      */
+    def freshName(base: String): String =
+      var candidate = base
+      while names.contains(candidate) do candidate = "_" + candidate
+      names += candidate
+      candidate
+
+    /** Lem. 5.2: rewrite `left S right` to `!alpha S (alpha & beta)` with
+      * `alpha = right | !left`, `beta = right`, then read off `rightmost`'s
+      * arguments. Operands are hoisted first, so a `Since` nested inside
+      * another one's operands becomes its own definition rather than an
+      * error.
+      */
+    def translateSince(name: String, left: Formula, right: Formula): Subprogram =
+      val hoistedLeft = hoistSince(left, name)
+      val hoistedRight = hoistSince(right, name)
+      val alpha = Disjunction(List(hoistedRight, Negation(hoistedLeft)))
+      Subprogram.RightmostAttention(
+        name,
+        toBooleanExpression(alpha, predicate = true),
+        toBooleanExpression(hoistedRight, predicate = true),
+      )
+
+    /** Replace every `Since` sitting inside a Boolean context by a reference
+      * to a fresh definition holding it.
+      *
+      * B-RASP has no way to write a temporal operator inside a Boolean
+      * expression, but it can name one and refer to the name — which is
+      * what a definition body needs whenever `normalize` has left a `Since`
+      * below a connective. `H φ` is the common case: Lem. 4.1 turns it into
+      * `¬(⊤ S ¬φ)`, so a `Historically` definition arrives here as a
+      * *negated* `Since` rather than a bare one.
+      *
+      * The reference takes the `Since`'s own anchor position, so a
+      * `Since` anchored at the witness keeps reading at `j` when it is
+      * hoisted out of a `rightmost` score or value. Helpers are appended
+      * before the subprogram that refers to them, preserving
+      * `Program.validate`'s no-forward-reference rule.
+      */
+    def hoistSince(formula: Formula, owner: String): Formula = formula match
+      case Since(anchor, _, left, right) =>
+        val helper = freshName(s"${owner}_since")
+        subprograms += translateSince(helper, left, right)
+        Reference(helper, anchor)
+      case Negation(operand)     => Negation(hoistSince(operand, owner))
+      case Conjunction(operands) => Conjunction(operands.map(hoistSince(_, owner)))
+      case Disjunction(operands) => Disjunction(operands.map(hoistSince(_, owner)))
+      case other                 => other
+
     def translateDefinition(name: String, formula: Formula): Subprogram =
       normalize(formula) match
         case Atom(AtomKind.BosAtom, Position.I, _) => Subprogram.Bos(name)
@@ -114,12 +165,8 @@ object LtlToBrasp:
           Subprogram.BooleanNode(name, BooleanExpression.Or(refs))
         case Atom(_, position, _) =>
           throw ReverseTranslationError(s"$name: an atom definition must be at position i, not ${position.render}")
-        case Since(_, _, left, right) =>
-          // Lem. 5.2: rewrite `left S right` to `!alpha S (alpha & beta)` with
-          // alpha = right | !left, beta = right, then read off rightmost's args.
-          val alpha = Disjunction(List(right, Negation(left)))
-          Subprogram.RightmostAttention(name, toBooleanExpression(alpha, predicate = true), toBooleanExpression(right, predicate = true))
-        case other => Subprogram.BooleanNode(name, toBooleanExpression(other, predicate = false))
+        case Since(_, _, left, right) => translateSince(name, left, right)
+        case other => Subprogram.BooleanNode(name, toBooleanExpression(hoistSince(other, name), predicate = false))
 
     for (name, formula) <- dag.definitions do subprograms += translateDefinition(name, formula)
 

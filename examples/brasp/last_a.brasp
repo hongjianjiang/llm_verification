@@ -1,7 +1,0 @@
-# Was there an 'a' strictly before the current (final) position?
-alphabet a b
-
-is_a         = symbol a
-last_a_is_a  = rightmost(is_a@j, is_a@j)
-
-output last_a_is_a

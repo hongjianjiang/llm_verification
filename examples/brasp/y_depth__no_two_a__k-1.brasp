@@ -1,0 +1,10 @@
+alphabet a b
+
+f_0 = symbol a
+f_1 = rightmost(f_0@j | !false, f_0@j)
+f_2 = f_0 & f_1
+f_3 = !f_2
+f_4_since = rightmost(!f_3@j | !true, !f_3@j)
+f_4 = !f_4_since
+
+output f_4

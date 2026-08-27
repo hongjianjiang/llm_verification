@@ -1,6 +1,0 @@
-# Accepts words whose last symbol is 'a'.
-alphabet a b
-
-is_a = symbol a
-
-output is_a

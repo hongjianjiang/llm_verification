@@ -1,0 +1,21 @@
+alphabet a b c d
+
+f_0 = symbol a
+f_1 = symbol d
+f_2 = symbol c
+f_3 = symbol b
+f_4 = rightmost(f_0@j | !true, f_0@j)
+f_5 = f_3 & f_4
+f_6 = rightmost(f_5@j | !true, f_5@j)
+f_7 = f_2 & f_6
+f_8 = rightmost(f_7@j | !true, f_7@j)
+f_9 = f_1 & f_8
+f_10 = rightmost(f_9@j | !true, f_9@j)
+f_11 = f_0 & f_10
+f_12 = !f_11
+f_13 = rightmost(f_11@j | !true, f_11@j)
+f_14 = !f_13
+f_15 = f_12 & f_14
+f_16 = !f_15
+
+output f_16

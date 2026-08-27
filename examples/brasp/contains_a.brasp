@@ -1,8 +1,0 @@
-# Accepts words containing at least one 'a' anywhere.
-alphabet a b
-
-is_a       = symbol a
-a_before   = rightmost(is_a@j, true)
-contains_a = is_a | a_before
-
-output contains_a

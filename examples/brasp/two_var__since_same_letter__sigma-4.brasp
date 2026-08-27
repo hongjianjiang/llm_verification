@@ -1,0 +1,10 @@
+alphabet marker a b c d
+
+f_0 = symbol a
+f_1 = symbol b
+f_2 = symbol c
+f_3 = symbol d
+f_4 = symbol marker
+f_5 = rightmost(f_4@j | !!(((!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & !(f_2@i & f_2@j)) & !(f_3@i & f_3@j)), f_4@j)
+
+output f_5

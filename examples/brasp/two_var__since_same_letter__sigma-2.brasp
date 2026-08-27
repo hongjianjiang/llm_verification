@@ -1,0 +1,8 @@
+alphabet marker a b
+
+f_0 = symbol a
+f_1 = symbol b
+f_2 = symbol marker
+f_3 = rightmost(f_2@j | !!(!(f_0@i & f_0@j) & !(f_1@i & f_1@j)), f_2@j)
+
+output f_3

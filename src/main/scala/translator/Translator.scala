@@ -29,6 +29,7 @@ final case class CliArgs(
     runAbc: Boolean = false,
     abcBin: File,
     abcRaw: Boolean = false,
+    timing: Boolean = false,
     json: Boolean = false,
     ltl: Boolean = false,
     dot: Boolean = false,
@@ -74,6 +75,7 @@ object Translator:
     var runAbc = false
     var abcBin: File = defaultAbcBin
     var abcRaw = false
+    var timing = false
     var jsonOut = false
     var ltlOut = false
     var dotOut = false
@@ -107,6 +109,7 @@ object Translator:
         case "--run-abc"            => runAbc = true
         case "--abc-bin"            => abcBin = File(takeValue("--abc-bin", it))
         case "--abc-raw"            => abcRaw = true
+        case "--timing"             => timing = true
         case "--json"               => jsonOut = true
         case "--ltl"                 => ltlOut = true
         case "--dot"                 => dotOut = true
@@ -136,6 +139,7 @@ object Translator:
       runAbc = runAbc,
       abcBin = abcBin,
       abcRaw = abcRaw,
+      timing = timing,
       json = jsonOut,
       ltl = ltlOut,
       dot = dotOut,
@@ -293,17 +297,23 @@ object Translator:
     * needing exactly this, the only difference being what runs first.
     */
   private def runAbcBackend(automaton: ReverseBooleanAutomaton, parsed: CliArgs, goal: String, emptyBad: Boolean): Int =
+    val encodeStart = System.nanoTime()
     val model =
       try Aiger.generateSafetyAuto(automaton, parsed.aigerMaxStates)
       catch
         case AigerError(message) =>
           System.err.println(s"translator: $message")
           return 2
+    Phases.encodeNs = System.nanoTime() - encodeStart
+    val solveStart = System.nanoTime()
     try Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
     catch
       case AbcError(message) =>
         System.err.println(s"translator: $message")
         2
+    finally
+      Phases.searchNs = System.nanoTime() - solveStart
+      Phases.searchLabel = "abc"
 
   /** Split `--word` text into symbols: whitespace-separated if it contains
     * whitespace (for multi-character symbols), otherwise one symbol per
@@ -328,13 +338,50 @@ object Translator:
     case CompileResult.PvwaaResult(automaton)   => automaton.alphabet
     case CompileResult.Dag(dag)                 => dag.alphabet.getOrElse(Nil)
 
+  /** Wall-clock phase breakdown for `--timing`, in nanoseconds.
+    *
+    * Phases are accumulated as the run proceeds and reported once, by
+    * `run`, so every exit path gets the same line. The total is
+    * *in-process*: it excludes JVM startup and class loading, so it reads a
+    * few hundred milliseconds below a `time` measured around the whole
+    * command. `compile` covers everything from reading the input through
+    * the Boolean-summary automaton (the one-variable translation included,
+    * when `--one-variable` asked for it); `encode` is the AIGER model
+    * build; `solve` is the backend's own search --- the ABC subprocess, or
+    * the in-process reachability exploration.
+    */
+  private object Phases:
+    var enabled = false
+    var compileNs = 0L
+    var encodeNs = 0L
+    var searchNs = 0L
+    var searchLabel = "solve"
+
+    // Locale.ROOT: a decimal point regardless of the host locale, so the
+    // line stays machine-readable when a benchmark script parses it.
+    private def seconds(ns: Long): String = String.format(java.util.Locale.ROOT, "%.2f", ns / 1e9)
+
+    /** One line to stderr, so it never mixes into a redirected verdict. */
+    def report(enabled: Boolean): Unit =
+      if enabled then
+        val parts = scala.collection.mutable.ArrayBuffer(s"compile ${seconds(compileNs)}s")
+        if encodeNs > 0 then parts += s"encode ${seconds(encodeNs)}s"
+        if searchNs > 0 then parts += s"$searchLabel ${seconds(searchNs)}s"
+        parts += s"total ${seconds(compileNs + encodeNs + searchNs)}s"
+        System.err.println(s"timing: ${parts.mkString("  ")}")
+
   def run(args: Array[String]): Int =
+    try runStages(args)
+    finally Phases.report(Phases.enabled)
+
+  private def runStages(args: Array[String]): Int =
     val parsed =
       try parseArgs(args)
       catch
         case CliParseError(message) =>
           System.err.println(s"translator: error: $message")
           return 2
+    Phases.enabled = parsed.timing
 
     if parsed.subset.isDefined && parsed.equivalent.isDefined then
       System.err.println("translator: error: choose only one of --subset or --equivalent")
@@ -349,6 +396,7 @@ object Translator:
           "non-determinized model with ABC, or plain --direct for a BTOR2 model to hand to an external solver"
       )
       return 2
+    val compileStart = System.nanoTime()
     val compiled: CompileResult =
       try
         val translated: FormulaDag =
@@ -418,6 +466,7 @@ object Translator:
         case LtlError(message) =>
           System.err.println(s"translator: $message")
           return 2
+    Phases.compileNs = System.nanoTime() - compileStart
 
     if parsed.word.isDefined then
       try
@@ -449,7 +498,10 @@ object Translator:
             else if parsed.equivalent.isDefined then "equivalence"
             else "safety"
           val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+          val searchStart = System.nanoTime()
           val dfa = BooleanAutomaton.reachable(automaton, parsed.nativeMaxStates)
+          Phases.searchNs = System.nanoTime() - searchStart
+          Phases.searchLabel = "explore"
           println(nativeSummary(dfa, automaton.source.alphabet, goal, emptyBad))
         else if parsed.runNativeConflict then
           val goal =
@@ -457,7 +509,10 @@ object Translator:
             else if parsed.equivalent.isDefined then "equivalence"
             else "safety"
           val emptyBad = BooleanAutomaton.diagonal(automaton, automaton.initial)(automaton.source.initialState)
+          val searchStart = System.nanoTime()
           val result = BooleanAutomaton.conflictWitness(automaton, parsed.nativeMaxStates)
+          Phases.searchNs = System.nanoTime() - searchStart
+          Phases.searchLabel = "explore"
           println(conflictSummary(result, goal, emptyBad))
         else if parsed.runAuto then
           val goal =
