@@ -30,7 +30,8 @@ java -jar $JAR examples/ltl/dot_depth__k-800__sigma-2.ltl --one-variable --run-n
 **`ABC`** — keep the pebble, compile to a circuit, model-check it:
 
 ```bash
-java -jar $JAR examples/ltl/dot_depth__k-800__sigma-2.ltl --run-abc
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-1024.ltl --run-abc
+java -jar $JAR examples/brasp/two_var__monotone_past__sigma-256.ltl --run-abc
 ```
 
 

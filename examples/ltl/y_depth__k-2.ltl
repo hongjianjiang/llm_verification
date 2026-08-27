@@ -1,9 +1,0 @@
-logic past-strict
-alphabet a b
-
-f_0 := sym(a)@i
-f_1 := Y(f_0@j)
-f_2 := Y(f_1@j)
-
-output := f_2@i
-evaluate at i = |w| (the final input position)
