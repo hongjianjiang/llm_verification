@@ -62,6 +62,7 @@ def compile_dfa(formula: PFormula, alphabet: tuple[str, ...] | list[str], cap: i
                 case PBot(): now[k] = False
                 case PBOS(): now[k] = first
                 case PLetter(s): now[k] = symbol == s
+                case PBit(b): now[k] = symbol[b] == '1'
                 case PNot(x): now[k] = not now[index[x]]
                 case PAnd(x,y): now[k] = now[index[x]] and now[index[y]]
                 case PY(x): now[k] = False if first else prev[index[x]]

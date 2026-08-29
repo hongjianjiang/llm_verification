@@ -62,6 +62,19 @@ class BOS(Unary): pass
 class Letter(Unary):
     symbol: str
 @dataclass(frozen=True)
+class Bit(Unary):
+    """Character `index` of the current symbol is ``'1'``.
+
+    The letter-level counterpart of an atomic proposition: over an alphabet
+    of bit-string symbols it tests one proposition directly, instead of
+    naming every valuation that satisfies it.  Writing a property of `n`
+    propositions therefore costs `O(n)` rather than `O(2^n)`, which is what
+    makes the succinctness families of the literature (which are stated
+    over propositions, not letters) expressible at their intended size.
+    Matches `AtomKind.BitAtom` on the Scala side, rendered `bit(N)@i`.
+    """
+    index: int
+@dataclass(frozen=True)
 class Not1(Unary):
     arg: Unary
 @dataclass(frozen=True)

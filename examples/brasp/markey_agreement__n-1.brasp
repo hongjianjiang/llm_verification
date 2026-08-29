@@ -1,0 +1,13 @@
+alphabet 00 01 10 11
+
+is_01 = symbol 01
+is_11 = symbol 11
+f_0 = is_01 | is_11
+f_1 = !f_0
+is_10 = symbol 10
+f_2 = is_10 | is_11
+f_3 = !f_2
+f_4_since = rightmost(!!(!(!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & (!(f_2@i & f_2@j) & !(f_3@i & f_3@j))) | !true, !!(!(!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & (!(f_2@i & f_2@j) & !(f_3@i & f_3@j))))
+f_4 = !f_4_since
+
+output f_4

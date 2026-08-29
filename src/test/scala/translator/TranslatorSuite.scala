@@ -741,9 +741,14 @@ class TranslatorSuite extends munit.FunSuite:
     assert(proved.contains("PROVED"))
     assert(proved.contains("✓ no nonempty bad prefix (unsat)"))
 
+    // The empty word is reported but excluded from the verdict: these
+    // languages are subsets of Σ⁺, so an ε-only counterexample still counts
+    // as PROVED. Matches `ltl2_generator`, whose positions are one-based in
+    // a non-empty word.
     val emptyWordBad = Translator.nativeSummary(emptyDfa, List("a", "b"), goal = "inclusion", emptyBad = true)
-    assert(emptyWordBad.contains("NOT PROVED"))
-    assert(emptyWordBad.contains("✗ no empty-word counterexample (sat) — witness: ε"))
+    assert(emptyWordBad.contains("PROVED"))
+    assert(!emptyWordBad.contains("NOT PROVED"))
+    assert(emptyWordBad.contains("✗ no empty-word counterexample (sat) — witness: ε (excluded: languages are subsets of Σ⁺)"))
 
     val reachingDfa = ReachableDfa(2, VectorMap((0, "a") -> 1), Set(1), 0, truncated = false)
     val counterexample = Translator.nativeSummary(reachingDfa, List("a", "b"), goal = "equivalence", emptyBad = false)

@@ -19,6 +19,7 @@ def eliminate(formula: Unary, *, optimised: bool = True) -> PFormula:
             case Bot(): return PBot()
             case BOS(): return PBOS()
             case Letter(s): return PLetter(s)
+            case Bit(k): return PBit(k)
             case Not1(x): return pnot(u(x))
             case And1(x,y): return pand(u(x),u(y))
             case Yst(mask): return expand_one(mask, PY)

@@ -1,0 +1,8 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+accept = is_a & !is_b
+
+output accept

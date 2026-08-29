@@ -246,7 +246,9 @@ object Translator:
         case _             => s"$backend: UNKNOWN — safety not decided within $exploredCount states (raise --native-max-states)."
     else
       val mainProved = nonemptyWitness.isEmpty
-      val allProved = mainProved && !emptyBad
+      // The empty word is reported but excluded from the verdict: these
+      // languages are subsets of Sigma^+ (see `Abc.summarize`).
+      val allProved = mainProved
       val heading =
         if allProved then
           goal match
@@ -271,7 +273,7 @@ object Translator:
         case _             => "no empty-word bad prefix"
       val emptyMark = if !emptyBad then "✓" else "✗"
       var emptyLine = s"  $emptyMark $emptyLabel (${if emptyBad then "sat" else "unsat"})"
-      if emptyBad then emptyLine += " — witness: ε"
+      if emptyBad then emptyLine += " — witness: ε (excluded: languages are subsets of Σ⁺)"
       List(heading, mainLine, emptyLine).mkString("\n")
 
   def nativeSummary(dfa: ReachableDfa, alphabet: List[String], goal: String, emptyBad: Boolean): String =

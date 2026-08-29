@@ -3,7 +3,7 @@
 # one CSV row per instance: verdict plus the --timing phase breakdown.
 #
 #   scripts/run_abc.sh                        # every examples/ltl/*.ltl
-#   scripts/run_abc.sh examples/ltl/two_var_*.ltl   # just these
+#   scripts/run_abc.sh examples/ltl/gastin_oddoux_depth__k*.ltl   # just these
 #   TIMEOUT=60 scripts/run_abc.sh             # longer budget
 #
 # Env: JAR, ABC_BIN, TIMEOUT (seconds), OUT (csv path), REPS (median of N).

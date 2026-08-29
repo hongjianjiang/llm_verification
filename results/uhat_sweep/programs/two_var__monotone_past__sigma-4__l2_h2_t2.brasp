@@ -1,0 +1,12 @@
+alphabet a b c d
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+is_d = symbol d
+h1_2 = leftmost(true, true)
+h2_2 = leftmost(true, true)
+accept = is_bos & !is_a & !is_b & !is_c & !is_d & !h1_2 & !h2_2 | is_bos & !is_a & !is_b & !is_c & !h1_2 & !h2_2
+
+output accept
