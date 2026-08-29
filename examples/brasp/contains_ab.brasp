@@ -1,0 +1,12 @@
+# uhat task `contains_ab`: `ab` occurs as a factor.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+ab_here = is_b & prev_a
+saw_ab = rightmost(ab_here@j, true)
+accept = ab_here | saw_ab
+
+output accept

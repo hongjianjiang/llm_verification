@@ -1,0 +1,10 @@
+# uhat task `last_a`: the word is nonempty and its last symbol is `a`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+# `is_a` is already false at the BOS position, so this rejects the empty word.
+accept = is_a
+
+output accept

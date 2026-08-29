@@ -32,6 +32,14 @@ object Abc:
     * user-facing verdict. `emptyBad` is the empty-word answer, already
     * known at compile time (`automaton.initial`'s own diagonal) — it does
     * not come from ABC.
+    *
+    * It is reported but does **not** enter the verdict: the languages this
+    * project decides are subsets of `Sigma^+`, not `Sigma^*`. That matches
+    * `ltl2_generator`, whose positions are one-based in a non-empty word
+    * and which therefore has no epsilon to accept, and it keeps the two
+    * implementations from disagreeing on every `H`-rooted formula, which is
+    * vacuously true at the boundary position. The line is kept because a
+    * language whose only member is epsilon is still worth seeing.
     */
   def summarize(stdout: String, goal: String, emptyBad: Boolean): String =
     val outcome =
@@ -40,7 +48,7 @@ object Abc:
       else "unrecognized"
 
     val mainProved = outcome == "unsat"
-    val allProved = mainProved && !emptyBad
+    val allProved = mainProved
     val heading =
       if allProved then
         goal match
@@ -70,7 +78,7 @@ object Abc:
         case _             => "no empty-word bad prefix"
       val emptyMark = if !emptyBad then "✓" else "✗"
       var emptyLine = s"  $emptyMark $emptyLabel (${if emptyBad then "sat" else "unsat"})"
-      if emptyBad then emptyLine += " — witness: ε"
+      if emptyBad then emptyLine += " — witness: ε (excluded: languages are subsets of Σ⁺)"
       lines += emptyLine
 
       if !allProved then lines += "  Run again with --abc-raw to inspect ABC's raw output (no witness word extraction yet)."

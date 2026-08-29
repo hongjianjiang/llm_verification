@@ -1,0 +1,13 @@
+# uhat task `first_a`: the word is nonempty and its first symbol is `a`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+seen_symbol = rightmost(!is_bos@j, true)
+first_is_a = !is_bos & is_a & !seen_symbol
+saw_first_is_a = rightmost(first_is_a@j, true)
+# Attention is strict-past, so the one-symbol word needs the left disjunct.
+accept = first_is_a | saw_first_is_a
+
+output accept

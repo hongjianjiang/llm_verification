@@ -8,7 +8,16 @@ from functools import cached_property
 class PFormula:
     @cached_property
     def size(self) -> int:
-        return 1 + sum(x.size for x in pchildren(self))
+        # Iterative, because eliminating a two-variable formula can produce a
+        # PLTL tree thousands of levels deep -- on the succinctness families
+        # that depth is the result being measured -- and a recursive sum
+        # exhausts the interpreter's stack before the number can be reported.
+        total, stack = 0, [self]
+        while stack:
+            node = stack.pop()
+            total += 1
+            stack.extend(pchildren(node))
+        return total
 
     @cached_property
     def temporal_depth(self) -> int:
@@ -23,6 +32,8 @@ class PBot(PFormula): pass
 class PBOS(PFormula): pass
 @dataclass(frozen=True)
 class PLetter(PFormula): symbol: str
+@dataclass(frozen=True)
+class PBit(PFormula): index: int
 @dataclass(frozen=True)
 class PNot(PFormula): arg: PFormula
 @dataclass(frozen=True)
@@ -73,6 +84,7 @@ def pltl_ascii(node: PFormula) -> str:
         case PBot(): return "FALSE"
         case PBOS(): return "BOS"
         case PLetter(s): return repr(s)
+        case PBit(k): return f"bit({k})"
         case PNot(x): return f"!({pltl_ascii(x)})"
         case PAnd(x,y): return f"({pltl_ascii(x)} & {pltl_ascii(y)})"
         case PY(x): return f"Y({pltl_ascii(x)})"
@@ -94,6 +106,7 @@ def eval_pltl(formula: PFormula, word: tuple[str, ...] | list[str], i: int | Non
             case PBot(): return False
             case PBOS(): return pos == 1
             case PLetter(s): return w[pos-1] == s
+            case PBit(k): return w[pos-1][k] == '1'
             case PNot(x): return not go(x,pos)
             case PAnd(x,y): return go(x,pos) and go(y,pos)
             case PY(x): return pos > 1 and go(x,pos-1)

@@ -1,0 +1,12 @@
+# uhat task `a_before_b`: some `a` occurs strictly before some `b`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+a_before = rightmost(is_a@j, true)
+b_after_a = is_b & a_before
+saw_b_after_a = rightmost(b_after_a@j, true)
+accept = b_after_a | saw_b_after_a
+
+output accept

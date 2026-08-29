@@ -1,0 +1,19 @@
+# uhat task `first_equals_last`: nonempty, and the first symbol equals the last.
+#
+# A "first occurrence" language: the reference program has to name the first
+# symbol position and carry it to the end.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+seen_symbol = rightmost(!is_bos@j, true)
+at_first = !is_bos & !seen_symbol
+first_is_a = at_first & is_a
+first_is_b = at_first & is_b
+saw_first_a = rightmost(first_is_a@j, true)
+saw_first_b = rightmost(first_is_b@j, true)
+# The one-symbol word is its own first symbol, hence the `at_first` disjuncts.
+accept = is_a & (first_is_a | saw_first_a) | is_b & (first_is_b | saw_first_b)
+
+output accept

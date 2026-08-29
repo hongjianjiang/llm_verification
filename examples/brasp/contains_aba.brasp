@@ -1,0 +1,15 @@
+# uhat task `contains_aba`: `aba` occurs as a factor.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+prev_b = rightmost(true, is_b@j)
+# `prev_a` read one step back again: the symbol two positions before i.
+prev_prev_a = rightmost(true, prev_a@j)
+aba_here = is_a & prev_b & prev_prev_a
+saw_aba = rightmost(aba_here@j, true)
+accept = aba_here | saw_aba
+
+output accept

@@ -1,0 +1,16 @@
+# uhat task `starts_ab`: the word starts with the factor `ab`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+seen_symbol = rightmost(!is_bos@j, true)
+at_first = !is_bos & !seen_symbol
+prev_at_first = rightmost(true, at_first@j)
+# position 2, holding `b`, whose predecessor (position 1) holds `a`.
+prev_a = rightmost(true, is_a@j)
+starts_here = is_b & prev_a & prev_at_first
+saw_starts = rightmost(starts_here@j, true)
+accept = starts_here | saw_starts
+
+output accept

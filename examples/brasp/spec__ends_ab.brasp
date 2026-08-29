@@ -1,0 +1,11 @@
+# Hand-written specification for the "ends in ab" language, used as the
+# reference a learned program is checked against (see uhat/README.md).
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+accept = is_b & prev_a
+
+output accept

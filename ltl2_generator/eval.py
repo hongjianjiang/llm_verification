@@ -18,6 +18,7 @@ def eval1(formula: Unary, word: tuple[str, ...] | list[str], i: int) -> bool:
             case Bot(): return False
             case BOS(): return pos == 1
             case Letter(symbol): return w[pos - 1] == symbol
+            case Bit(index): return w[pos - 1][index] == '1'
             case Not1(arg): return not one(arg, pos)
             case And1(left, right): return one(left, pos) and one(right, pos)
             case Yst(mask): return pos > 1 and two(mask, pos, pos - 1)
@@ -55,6 +56,7 @@ def _eval2_direct(formula: Binary, w: tuple[str, ...], i: int, j: int) -> bool:
             case Bot(): return False
             case BOS(): return pos == 1
             case Letter(symbol): return w[pos - 1] == symbol
+            case Bit(index): return w[pos - 1][index] == '1'
             case Not1(arg): return not one(arg, pos)
             case And1(left, right): return one(left, pos) and one(right, pos)
             case Yst(mask): return pos > 1 and two(mask, pos, pos-1)

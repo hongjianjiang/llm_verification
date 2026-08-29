@@ -1,0 +1,17 @@
+# uhat task `c_after_ab`: some `c` has an `ab` factor entirely before it.
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+prev_a = rightmost(true, is_a@j)
+ab_here = is_b & prev_a
+# strict-past, so this is "an `ab` ended strictly before i" -- exactly the
+# task's `w[:i]`, which excludes position i itself.
+saw_ab = rightmost(ab_here@j, true)
+c_after = is_c & saw_ab
+saw_c_after = rightmost(c_after@j, true)
+accept = c_after | saw_c_after
+
+output accept

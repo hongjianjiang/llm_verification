@@ -1,0 +1,19 @@
+alphabet 000 001 010 011 100 101 110 111
+
+is_010 = symbol 010
+is_011 = symbol 011
+is_110 = symbol 110
+is_111 = symbol 111
+f_0 = is_010 | is_011 | is_110 | is_111
+f_1 = !f_0
+is_001 = symbol 001
+is_101 = symbol 101
+f_2 = is_001 | is_011 | is_101 | is_111
+f_3 = !f_2
+is_100 = symbol 100
+f_4 = is_100 | is_101 | is_110 | is_111
+f_5 = !f_4
+f_6_since = rightmost(!!((!(!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & !(!(f_2@i & f_2@j) & !(f_3@i & f_3@j))) & (!(f_4@i & f_4@j) & !(f_5@i & f_5@j))) | !true, !!((!(!(f_0@i & f_0@j) & !(f_1@i & f_1@j)) & !(!(f_2@i & f_2@j) & !(f_3@i & f_3@j))) & (!(f_4@i & f_4@j) & !(f_5@i & f_5@j))))
+f_6 = !f_6_since
+
+output f_6
