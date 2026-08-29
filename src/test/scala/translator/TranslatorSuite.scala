@@ -990,18 +990,23 @@ class TranslatorSuite extends munit.FunSuite:
     * because it's cheap and because `reachable` *can* decide it (checked
     * directly here as an extra cross-check, unlike `y_depth`).
     *
-    * Skips any fixture that isn't present, matching
-    * `PerfRegressionSuite`/`LtlExamplesCrossCheckSuite`'s own convention
-    * for repo-relative benchmark files that aren't guaranteed to exist in
-    * every checkout.
+    * The `k` values are asserted present, not skipped over. This test used
+    * to name a fixture set that no longer exists (`y_depth__k-17..30`,
+    * `dot_depth__k-9/15/24__sigma-2` -- `dot_depth__k-15__sigma-2.brasp`
+    * was real once and got renamed away), and because a missing fixture
+    * only `assume`d, the whole test silently stopped running instead of
+    * saying so. Skipping is right for benchmark trees that genuinely are
+    * not in every checkout (`PerfRegressionSuite`, which reads the ignored
+    * `ltl_examples/`); it is wrong for `examples/brasp`, which is tracked.
     */
   test("BooleanAutomaton.conflictWitness's witnesses on y_depth/dot_depth are genuinely accepted (independent Pvwaa.accepts check)") {
-    val yDepthFixtures = (17 to 30).map(k => new File(s"examples/brasp/y_depth__k-$k.brasp"))
-    val dotDepthFixtures = List(9, 15, 24).map(k => new File(s"examples/brasp/dot_depth__k-${k}__sigma-2.brasp"))
+    val yDepthFixtures = List(10, 15, 100).map(k => new File(s"examples/brasp/y_depth__k-$k.brasp"))
+    val dotDepthFixtures = List(5, 100).map(k => new File(s"examples/brasp/dot_depth__k-${k}__sigma-2.brasp"))
     val fixtures = yDepthFixtures ++ dotDepthFixtures
-    assume(fixtures.exists(_.isFile), "no examples/brasp fixtures found in this checkout")
+    for file <- fixtures do
+      assert(file.isFile, s"tracked fixture is missing: $file")
 
-    for file <- fixtures if file.isFile do
+    for file <- fixtures do
       val pvwaa = pvwaaFromBrasp(Files.readString(file.toPath))
       val automaton = BooleanAutomaton.fromForwardPvwaa(pvwaa)
       val result = BooleanAutomaton.conflictWitness(automaton, maxStates = 200_000)
@@ -1016,7 +1021,7 @@ class TranslatorSuite extends munit.FunSuite:
     // the independent-evaluator one above, same as the other
     // `assertConflictAgreesWithReachable` tests already do for other
     // automata.
-    for file <- dotDepthFixtures if file.isFile do
+    for file <- dotDepthFixtures do
       assertConflictAgreesWithReachable(BooleanAutomaton.fromForwardPvwaa(pvwaaFromBrasp(Files.readString(file.toPath))), maxStates = 200_000)
   }
 
