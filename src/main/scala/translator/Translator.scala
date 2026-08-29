@@ -22,7 +22,6 @@ final case class CliArgs(
     runNativeConflict: Boolean = false,
     runAuto: Boolean = false,
     nativeMaxStates: Int = 4096,
-    direct: Boolean = false,
     oneVariable: Boolean = false,
     aiger: Boolean = false,
     aigerMaxStates: Int = 4096,
@@ -68,7 +67,6 @@ object Translator:
     var runNativeConflict = false
     var runAuto = false
     var nativeMaxStates = 4096
-    var directOut = false
     var oneVariable = false
     var aigerOut = false
     var aigerMaxStates = 4096
@@ -100,7 +98,6 @@ object Translator:
         case "--native-max-states"  =>
           val raw = takeValue("--native-max-states", it)
           nativeMaxStates = raw.toIntOption.getOrElse(fail(s"argument --native-max-states: expected an integer, got '$raw'"))
-        case "--direct"             => directOut = true
         case "--one-variable"       => oneVariable = true
         case "--aiger"              => aigerOut = true
         case "--aiger-max-states"   =>
@@ -132,7 +129,6 @@ object Translator:
       runNativeConflict = runNativeConflict,
       runAuto = runAuto,
       nativeMaxStates = nativeMaxStates,
-      direct = directOut,
       oneVariable = oneVariable,
       aiger = aigerOut,
       aigerMaxStates = aigerMaxStates,
@@ -386,16 +382,6 @@ object Translator:
     if parsed.subset.isDefined && parsed.equivalent.isDefined then
       System.err.println("translator: error: choose only one of --subset or --equivalent")
       return 2
-    // Rejected rather than silently ignoring one of the two: the
-    // non-determinized AIGER encoding exists only to be handed to ABC, so
-    // there is no sensible model for `--direct --aiger` to print — and
-    // quietly emitting the *determinized* one instead would be worse.
-    if parsed.direct && parsed.aiger then
-      System.err.println(
-        "translator: error: --direct has no --aiger form; use --direct --run-abc to check the " +
-          "non-determinized model with ABC, or plain --direct for a BTOR2 model to hand to an external solver"
-      )
-      return 2
     val compileStart = System.nanoTime()
     val compiled: CompileResult =
       try
@@ -414,15 +400,6 @@ object Translator:
               BraspToLtl.translateProgram(Inclusion.equivalenceCounterexampleProgram(inputProgram, loadProgram(parsed.equivalent.get)))
             else BraspToLtl.translateProgram(inputProgram)
 
-        // `--direct` wins over `--run-abc`: that flag asks for a solver run,
-        // not specifically for the determinized encoding, so combining the
-        // two means "check the non-determinized model with ABC"
-        // (`Aiger.generateSafetyDirect`). It does *not* win over `--aiger`:
-        // the non-determinized AIGER model is only ever produced to be
-        // checked, never printed — plain `--direct` is how you get a model
-        // to hand to an external solver, and it emits BTOR2 for that.
-        // Every other Boolean-automaton consumer below has no `--direct`
-        // counterpart at all.
         // The classical baseline: compile the second variable away first,
         // paying the exponential up front, and hand the backends an ordinary
         // one-variable formula (hence a VWAA, with no goto atoms).
@@ -438,10 +415,10 @@ object Translator:
         val needsBooleanAutomaton =
           parsed.booleanAutomaton ||
             parsed.runNative || parsed.runNativeConflict || parsed.runAuto || parsed.aiger ||
-            ((parsed.subset.isDefined || parsed.equivalent.isDefined || parsed.runAbc) && !parsed.direct)
+            parsed.subset.isDefined || parsed.equivalent.isDefined || parsed.runAbc
         if needsBooleanAutomaton then
           CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(compiled0))))
-        else if parsed.pvwaa || parsed.direct then
+        else if parsed.pvwaa then
           CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(compiled0)))
         else if parsed.future then
           CompileResult.Dag(mirrorToFuture(compiled0))
@@ -573,39 +550,7 @@ object Translator:
             case None       => ()
           println(if parsed.json then Json.render(BooleanAutomaton.toJson(automaton)) else BooleanAutomaton.render(automaton))
       case CompileResult.PvwaaResult(automaton) =>
-        if parsed.direct && parsed.runAbc then
-          // The non-determinized model through the ABC backend: same
-          // construction as the BTOR2 branch below, bit-blasted. `emptyBad`
-          // is `DirectPvwaa`'s own compile-time empty-word answer, not
-          // `BooleanAutomaton.diagonal`'s — there is no Boolean automaton
-          // on this path.
-          val goal =
-            if parsed.subset.isDefined then "inclusion"
-            else if parsed.equivalent.isDefined then "equivalence"
-            else "safety"
-          val emptyBad = DirectPvwaa.emptyWordAccepted(automaton)
-          val model =
-            try Aiger.generateSafetyDirect(automaton)
-            catch
-              case AigerError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          return (
-            try Abc.run(model, parsed.abcBin, goal, emptyBad, parsed.abcRaw)
-            catch
-              case AbcError(message) =>
-                System.err.println(s"translator: $message")
-                2
-          )
-        else if parsed.direct then
-          val model =
-            try DirectPvwaa.generateSafety(automaton)
-            catch
-              case DirectPvwaaError(message) =>
-                System.err.println(s"translator: $message")
-                return 2
-          println(model)
-        else if parsed.dot then
+        if parsed.dot then
           val dot = Pvwaa.toDot(automaton)
           trySaveArtifact(graphOutputPath(parsed.input, suffix = "pvwaa"), dot) match
             case Some(code) => return code

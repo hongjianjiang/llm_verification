@@ -4,10 +4,7 @@ import java.io.ByteArrayOutputStream
 import scala.collection.mutable
 
 /** Binary AIGER (.aig) backend for reverse Boolean-summary automata: bit-level
-  * circuits (AIGER) checked by ABC. The non-determinized `--direct` backend
-  * (`DirectPvwaa.scala`) emits a separate BTOR2 encoding for word-level
-  * checkers such as rIC3, but this project has no BTOR2 encoder of its own
-  * for the determinized automaton.
+  * circuits (AIGER) checked by ABC.
   *
   * The encoding: one Boolean state register (here, an AIGER latch) per
   * `(pvwaa state, abstraction)` summary cell, a `symbol` input bit-blasted
@@ -39,7 +36,7 @@ object Aiger:
   private final class Builder:
     private var nextVar = 1
     val andGates = mutable.ArrayBuffer.empty[(Int, Int, Int)] // (outputLit, aLit, bLit)
-    // Structural hashing, as the BTOR2 builder in `DirectPvwaa` already does.
+    // Structural hashing.
     // Without it every `(cell, symbol)` pair rebuilds the same subcircuits
     // from scratch: `monotone_past` at sigma=64 emitted 393,020 gates that
     // ABC's own hashing then folded to 39,250 on read, and paid ~4s to do it.
@@ -125,10 +122,9 @@ object Aiger:
     val width = symbolWidth(alphabetSize)
     // A non-power-of-two alphabet leaves spare bit patterns that denote no
     // symbol. AIGER has no counterpart to BTOR2's `constraint` line to rule
-    // them out, so they are blocked the same way `generateSafetyDirect`
-    // blocks them: a sticky latch that sets on the first out-of-range code
-    // and is required low by the output, so no run over a phantom symbol can
-    // ever report acceptance.
+    // them out, so they are blocked with a sticky latch that sets on the
+    // first out-of-range code and is required low by the output: no run over
+    // a phantom symbol can ever report acceptance.
     val needsRangeCheck = alphabetSize < (1 << width)
     val inputVars = Vector.fill(width)(b.freshVar())
     val inputLits = inputVars.map(v => b.lit(v))
@@ -208,7 +204,7 @@ object Aiger:
       * `monotone_past` (whose formula already grows as `sigma^2`) is
       * `Theta(sigma^4)`: measured, emission there took 3.3s at `sigma = 64`
       * against 250ms at `sigma = 32`. Resolving the test once instead makes
-      * it `cells x |delta|`. `generateSafetyDirect` has always done it this
+      * it `cells x |delta|`. This is done this
       * way; this is the determinized encoder catching up.
       */
     val symbolTestCache = mutable.Map.empty[(AtomKind, Option[String], Boolean), Int]
@@ -290,162 +286,6 @@ object Aiger:
 
     out.toByteArray
 
-  /** Emit an AIGER model of the *non-determinized* forward PVWAA — the
-    * bit-blasted sibling of `DirectPvwaa.generateSafety`'s BTOR2 output, so
-    * that ABC's `pdr` can check it in-process instead of the model having to
-    * be handed to an external word-level solver by hand.
-    *
-    * The construction is `DirectPvwaa.generateSafety`'s, unchanged: one
-    * `active` latch per PVWAA state, one freshly guessed input per state
-    * that simply becomes that latch's next value, a sticky `err` latch
-    * asserting that every pending obligation was discharged, and a `root`
-    * register per `containsGoto` state holding the symbol under that
-    * state's pebble. See that function's doc-comment for the semantics and
-    * for the one empirical assumption it rests on
-    * (`tools.GotoOverlapCheck`); everything below is only about expressing
-    * it in AIGER's Boolean-circuit vocabulary rather than BTOR2's
-    * word-level one.
-    *
-    * Two deliberate differences from the BTOR2 model, neither of which
-    * changes which words are accepted:
-    *
-    *   - `bad` is computed from the *next* values of the registers
-    *     (`err'`, and the guesses that become the next `active` set) rather
-    *     than the current ones, matching `generateSafety`'s own convention
-    *     above: an AIGER output is combinational over current latches and
-    *     inputs, and taking it one step later is what makes "the prefix
-    *     ending with the symbol just read is accepted" expressible. So this
-    *     model's `bad` at time `t` is exactly the BTOR2 model's at `t+1`.
-    *     BTOR2's `started` register becomes unnecessary as a result: every
-    *     `bad` here is inherently about a word of length >= 1, so the empty
-    *     word — still `DirectPvwaa.emptyWordAccepted`, a compile-time
-    *     constant — is excluded for free rather than by a gate.
-    *   - BTOR2's `constraint` line keeping the symbol input in range has no
-    *     AIGER equivalent, so a non-power-of-two alphabet gets a sticky
-    *     `oor` latch instead: it latches on the first out-of-range symbol
-    *     and `bad` requires it low. Any trace that reads a symbol outside
-    *     the alphabet is thereby prevented from ever reporting acceptance,
-    *     while every trace over real symbols is untouched. (The
-    *     determinized encoders above reject such alphabets outright; this
-    *     one does not need to.)
-    */
-  def generateSafetyDirect(automaton: ForwardPVWAA): Array[Byte] =
-    if automaton.alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
-    val b = Builder()
-    val states = automaton.states
-    val alphabet = automaton.alphabet
-    val alphabetSize = alphabet.length
-    val alphabetIndex = alphabet.zipWithIndex.toMap
-    val width = symbolWidth(alphabetSize)
-
-    // AIGER numbers variables positionally: every input before every latch,
-    // every latch before every AND gate. So all three groups are allocated
-    // here, in that order, before a single gate is built.
-    val symbolLits = Vector.fill(width)(b.lit(b.freshVar()))
-    val guessLit = states.map(state => state -> b.lit(b.freshVar())).toMap
-
-    val needsRoot = states.filter(state => DirectPvwaa.containsGoto(automaton.transitions(state)))
-    val activeVar = states.map(state => state -> b.freshVar()).toMap
-    val errVar = b.freshVar()
-    val rootVars = needsRoot.map(state => state -> Vector.fill(width)(b.freshVar())).toMap
-    val activePrevVar = needsRoot.map(state => state -> b.freshVar()).toMap
-    val needsRangeCheck = alphabetSize < (1 << width)
-    val oorVar = if needsRangeCheck then Some(b.freshVar()) else None
-
-    // Only `active_{q0}` resets high; every other latch here resets to 0
-    // already (`root` to symbol index 0, matching the BTOR2 model's own
-    // `init ... constIndex(0)`), so the XOR-with-init canonicalization
-    // (see this file's doc-comment) touches exactly that one latch.
-    def resetsHigh(state: String): Boolean = state == automaton.initialState
-    def activeLit(state: String): Int = b.flip(b.lit(activeVar(state)), resetsHigh(state))
-    val errLit = b.lit(errVar)
-
-    // `root_q` re-arms exactly when `active_q` rises 0 -> 1 — the step a
-    // `Carry` placed the pebble — and holds otherwise.
-    val rootLits = needsRoot.map { state =>
-      val justArmed = b.and(activeLit(state), b.not(b.lit(activePrevVar(state))))
-      state -> rootVars(state).zip(symbolLits).map((root, symbol) => b.ite(justArmed, symbol, b.lit(root)))
-    }.toMap
-
-    def bitsEqual(wire: Vector[Int], index: Int): Int =
-      (0 until width).foldLeft(b.True) { (acc, bitPos) =>
-        val bit = if ((index >> bitPos) & 1) == 1 then b.True else b.False
-        b.and(acc, b.xnor(wire(bitPos), bit))
-      }
-
-    def resolveSymbolTest(wire: Vector[Int], kind: AtomKind, symbol: Option[String], dual: Boolean): Int =
-      alphabet
-        .filter(candidate => Ltl.symbolMatches(kind, symbol, candidate) != dual)
-        .map(candidate => bitsEqual(wire, alphabetIndex(candidate)))
-        .foldLeft(b.False)(b.or)
-
-    // `current` is what a direct `SymbolTest` leaf resolves against;
-    // `goto` is what it switches to (and stays at, through further nested
-    // `Goto`s) once a `Goto` has been crossed — `DirectPvwaa.encodeFor`'s
-    // two wires, as literal vectors instead of BTOR2 node ids.
-    def encodeFor(current: Vector[Int], goto: Vector[Int])(f: PositiveFormula): Int = f match
-      case PositiveFormula.PositiveConstant(value)     => if value then b.True else b.False
-      case PositiveFormula.SymbolTest(kind, sym, dual) => resolveSymbolTest(current, kind, sym, dual)
-      case PositiveFormula.PositiveAnd(operands)       => operands.map(encodeFor(current, goto)).reduceLeftOption(b.and).getOrElse(b.True)
-      case PositiveFormula.PositiveOr(operands)        => operands.map(encodeFor(current, goto)).reduceLeftOption(b.or).getOrElse(b.False)
-      case PositiveFormula.TransitionAtom(state, Action.Goto) =>
-        encodeFor(goto, goto)(automaton.transitions(state))
-      case PositiveFormula.TransitionAtom(state, Action.Carry | Action.Leave) =>
-        guessLit(state)
-
-    val obligationOf =
-      states.map(state => state -> encodeFor(symbolLits, rootLits.getOrElse(state, symbolLits))(automaton.transitions(state))).toMap
-    val allSatisfied = states.map(state => b.or(b.not(activeLit(state)), obligationOf(state))).foldLeft(b.True)(b.and)
-    val errNext = b.not(b.and(b.not(errLit), allSatisfied))
-
-    // Only built when it can actually be violated: for a power-of-two
-    // alphabet every bit pattern is a real symbol, and `inRange` would be a
-    // tautology costing `|Sig| * width` gates to say so.
-    val oorNext = oorVar.map { v =>
-      val inRange = alphabet.indices.map(index => bitsEqual(symbolLits, index)).foldLeft(b.False)(b.or)
-      b.or(b.lit(v), b.not(inRange))
-    }
-
-    // "the word ends after the symbol just read": every obligation up to
-    // and including this step was discharged (`err'` low), and the layer of
-    // obligations that would come due next is all-final. Mirrors
-    // `Pvwaa.accepts`'s own `head == length` base case.
-    val allNextAreFinal =
-      states
-        .map(state => b.or(b.not(guessLit(state)), if automaton.finalStates.contains(state) then b.True else b.False))
-        .foldLeft(b.True)(b.and)
-    val accepted = b.and(b.not(errNext), allNextAreFinal)
-    val badLit = oorNext.fold(accepted)(oor => b.and(accepted, b.not(oor)))
-
-    // Emitted in latch-variable order, since AIGER's header block gives one
-    // `next` line per latch positionally.
-    val latchNext = mutable.Map.empty[Int, Int]
-    for state <- states do latchNext(activeVar(state)) = b.flip(guessLit(state), resetsHigh(state))
-    latchNext(errVar) = errNext
-    for state <- needsRoot do
-      for (variable, next) <- rootVars(state).zip(rootLits(state)) do latchNext(variable) = next
-      latchNext(activePrevVar(state)) = activeLit(state)
-    for (v, next) <- oorVar.zip(oorNext) do latchNext(v) = next
-
-    val out = new ByteArrayOutputStream()
-    def writeLine(text: String): Unit = out.write((text + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII))
-
-    val inputCount = width + states.length
-    val orderedLatches = latchNext.toList.sortBy(_._1)
-    writeLine(s"aig ${b.maxVar} $inputCount ${orderedLatches.length} 1 ${b.andGates.length}")
-    for (_, nextLit) <- orderedLatches do writeLine(nextLit.toString)
-    writeLine(badLit.toString)
-    for (outLit, aLit, cLit) <- b.andGates do
-      val rhsHigh = math.max(aLit, cLit)
-      val rhsLow = math.min(aLit, cLit)
-      encodeDelta(out, outLit - rhsHigh)
-      encodeDelta(out, rhsHigh - rhsLow)
-    writeLine("c")
-    for (symbol, index) <- alphabet.zipWithIndex do
-      writeLine(s"symbol = $index represents input symbol '$symbol' (bit-blasted, $width-bit).")
-
-    out.toByteArray
-
   /** Emit an AIGER model for `dfa` (`BooleanAutomaton.reachable`'s explicit
     * exploration of the automaton's *actually* reachable states) directly:
     * `ceil(log2(stateCount))` latches encoding the current state in binary,
@@ -482,10 +322,9 @@ object Aiger:
     val width = symbolWidth(alphabetSize)
     // A non-power-of-two alphabet leaves spare bit patterns that denote no
     // symbol. AIGER has no counterpart to BTOR2's `constraint` line to rule
-    // them out, so they are blocked the same way `generateSafetyDirect`
-    // blocks them: a sticky latch that sets on the first out-of-range code
-    // and is required low by the output, so no run over a phantom symbol can
-    // ever report acceptance.
+    // them out, so they are blocked with a sticky latch that sets on the
+    // first out-of-range code and is required low by the output: no run over
+    // a phantom symbol can ever report acceptance.
     val needsRangeCheck = alphabetSize < (1 << width)
     val inputVars = Vector.fill(width)(b.freshVar())
     val inputLits = inputVars.map(v => b.lit(v))

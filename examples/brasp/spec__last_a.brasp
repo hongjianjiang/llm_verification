@@ -1,0 +1,11 @@
+# "the word ends with a" -- a near miss for `spec__first_and_last_a.brasp`,
+# which additionally constrains the first symbol. The two differ on `ba`,
+# which is what makes this useful as the NOT-PROVED side of a check.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+accept = !is_bos & is_a
+
+output accept

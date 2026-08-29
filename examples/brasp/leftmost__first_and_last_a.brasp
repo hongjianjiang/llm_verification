@@ -1,0 +1,22 @@
+# "the word is nonempty and both its first and its last symbol are a",
+# written with leftmost attention -- the head shape learned programs reach
+# for (see the uhat sweep), and the reason `BraspNormalize` exists.
+#
+# The leftmost score reads the *query* position as well as the witness, so
+# translating it needs the case split over `@i` variables, not the trivial
+# one-residual path: under `is_a@i` the witness is the first symbol position,
+# under `is_b@i` it is the first `b` (whose value is then never `a`).
+#
+# Checked against `spec__first_and_last_a.brasp`, which spells out the same
+# language with rightmost attention only.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+seen_symbol = rightmost(!is_bos@j, true)
+at_first = !is_bos & !seen_symbol
+h = leftmost(is_a@i & !is_bos@j | is_b@i & is_b@j, is_a@j)
+accept = h | at_first & is_a
+
+output accept

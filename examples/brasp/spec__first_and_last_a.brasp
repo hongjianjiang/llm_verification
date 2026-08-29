@@ -1,0 +1,14 @@
+# "the word is nonempty and both its first and its last symbol are a",
+# with rightmost attention only: the reference side of the `--equivalent`
+# check against `leftmost__first_and_last_a.brasp`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+seen_symbol = rightmost(!is_bos@j, true)
+first_is_a = !is_bos & is_a & !seen_symbol
+saw_first_is_a = rightmost(first_is_a@j, true)
+accept = is_a & (first_is_a | saw_first_is_a)
+
+output accept

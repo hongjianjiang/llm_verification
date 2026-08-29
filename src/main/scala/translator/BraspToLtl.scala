@@ -17,6 +17,9 @@ import scala.collection.immutable.VectorMap
   *     forced to the latest prior position matching `S`, exactly the
   *     rightmost-attention semantics — this is the same identity
   *     `LtlToBrasp` runs in reverse (Lem. 5.2).
+  *   - `leftmost[S]V` has no such one-step identity (it would need a third
+  *     position to say "no earlier match"), so `BraspNormalize` rewrites it
+  *     into rightmost attention first; see that object for the construction.
   */
 object BraspToLtl:
   import BooleanExpression as BE
@@ -29,14 +32,18 @@ object BraspToLtl:
     case BE.And(operands)  => Formula.Conjunction(operands.map(translateBoolean))
     case BE.Or(operands)   => Formula.Disjunction(operands.map(translateBoolean))
 
-  /** Compile validated rightmost-past B-RASP into strict-past 2LTL.
+  /** Compile validated past B-RASP into strict-past 2LTL.
     *
     * For `Rightmost[S]V` this creates `¬S S (S ∧ V)`. The left operand
     * forces the strict-Since witness to be the latest prior score match.
+    * `Leftmost[S]V` is rewritten into rightmost attention first, so the
+    * resulting DAG defines more names than the input program had — every
+    * input name still keeps its own meaning.
     */
   def translateProgram(program: Program): FormulaDag =
     program.validate()
-    val entries: List[(String, Formula)] = program.subprograms.map { subprogram =>
+    val rightmostOnly = BraspNormalize.leftmostToRightmost(program)
+    val entries: List[(String, Formula)] = rightmostOnly.subprograms.map { subprogram =>
       val formula: Formula = subprogram match
         case SP.Bos(_)                     => Formula.Atom(AtomKind.BosAtom, Position.I)
         case SP.SymbolNode(_, symbol)      => Formula.Atom(AtomKind.SymbolAtom, Position.I, Some(symbol))
@@ -45,16 +52,18 @@ object BraspToLtl:
           val s = translateBoolean(score)
           val v = translateBoolean(value)
           Formula.Since(Position.I, Position.J, Formula.Negation(s), Formula.Conjunction(List(s, v)))
+        // Unreachable: `BraspNormalize.leftmostToRightmost` above either
+        // removed every leftmost node or refused with its own explanation.
         case SP.LeftmostAttention(name, _, _) =>
-          throw TranslationError(s"$name: normalize leftmost attention to rightmost attention before translation")
+          throw TranslationError(s"$name: leftmost attention survived normalization to rightmost attention")
       subprogram.name -> formula
     }
     FormulaDag(
       logic = Logic.PastStrict,
       definitions = VectorMap.from(entries),
-      output = Formula.Reference(program.output, Position.I),
+      output = Formula.Reference(rightmostOnly.output, Position.I),
       evaluationPoint = "i = |w| (the final input position)",
-      alphabet = program.alphabet,
+      alphabet = rightmostOnly.alphabet,
     )
 
   /** Parse JSON syntax and compile it to strict-past 2LTL. */

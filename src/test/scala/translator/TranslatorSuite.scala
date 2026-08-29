@@ -14,90 +14,6 @@ class TranslatorSuite extends munit.FunSuite:
     if n == 0 then List(Nil)
     else for first <- alphabet; rest <- wordsOfLength(n - 1, alphabet) yield first :: rest
 
-  /** A tiny BTOR2 interpreter for `DirectPvwaa.generateSafety`'s models,
-    * covering exactly the op vocabulary it emits
-    * (sort/zero/one/constd/input/state/init/next/eq/ite/and/or/ult/bad),
-    * used to check the encoder against `Pvwaa.accepts` without a real
-    * BTOR2 solver. Unlike a plain BTOR2 circuit, these models have more
-    * than one `input` (the shared `symbol`, plus one existentially-guessed
-    * "next obligation" per PVWAA state) — a single shared `currentInput`
-    * can't represent that. `symbol` is always the first declared input
-    * (see `DirectPvwaa.generateSafety`'s own doc-comment); every other
-    * input is a guess this search existentially quantifies over via a
-    * small BFS across reachable register-value tuples, exactly mirroring
-    * what the real solver does. Returns, for a run over `symbolIndices`,
-    * whether `bad` is reachable after consuming each prefix — small
-    * automata only (guess count is exponential in the search), which is
-    * all this backend's own tests need.
-    */
-  private def runDirectPvwaa(model: String, symbolIndices: IndexedSeq[Int]): List[Boolean] =
-    case class Op(keyword: String, args: List[Int])
-    val ops = scala.collection.mutable.Map.empty[Int, Op]
-    val consts = scala.collection.mutable.Map.empty[Int, Int]
-    val stateIds = scala.collection.mutable.Set.empty[Int]
-    val registerInit = scala.collection.mutable.Map.empty[Int, Int]
-    val registerNext = scala.collection.mutable.Map.empty[Int, Int]
-    var badId = -1
-    var symbolInputId = -1
-    val guessInputIds = scala.collection.mutable.ArrayBuffer.empty[Int]
-
-    for line <- model.linesIterator if line.nonEmpty && !line.startsWith(";") do
-      val parts = line.trim.split("\\s+").toList
-      val id = parts.head.toInt
-      parts(1) match
-        case "sort"       => ()
-        case "zero"       => consts(id) = 0
-        case "one"        => consts(id) = 1
-        case "constd"     => consts(id) = parts(3).toInt
-        case "input"      => if symbolInputId < 0 then symbolInputId = id else guessInputIds += id
-        case "state"      => stateIds += id
-        case "init"       => registerInit(parts(3).toInt) = parts(4).toInt
-        case "next"       => registerNext(parts(3).toInt) = parts(4).toInt
-        case "bad"        => badId = parts(2).toInt
-        case "constraint" => ()
-        case "eq" | "ult" => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt))
-        case "and" | "or" => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt))
-        case "not"        => ops(id) = Op(parts(1), List(parts(3).toInt))
-        case "ite"        => ops(id) = Op(parts(1), List(parts(3).toInt, parts(4).toInt, parts(5).toInt))
-        case other        => throw new RuntimeException(s"runDirectPvwaa: unsupported op '$other'")
-
-    def eval(id: Int, symbolValue: Int, guesses: Map[Int, Int], registers: Map[Int, Int], memo: scala.collection.mutable.Map[Int, Int]): Int =
-      memo.getOrElseUpdate(
-        id,
-        if stateIds.contains(id) then registers(id)
-        else if id == symbolInputId then symbolValue
-        else if guesses.contains(id) then guesses(id)
-        else
-          consts.get(id) match
-            case Some(v) => v
-            case None =>
-              val op = ops(id)
-              op.keyword match
-                case "eq"  => if eval(op.args(0), symbolValue, guesses, registers, memo) == eval(op.args(1), symbolValue, guesses, registers, memo) then 1 else 0
-                case "ult" => if eval(op.args(0), symbolValue, guesses, registers, memo) < eval(op.args(1), symbolValue, guesses, registers, memo) then 1 else 0
-                case "and" => if eval(op.args(0), symbolValue, guesses, registers, memo) == 1 && eval(op.args(1), symbolValue, guesses, registers, memo) == 1 then 1 else 0
-                case "or"  => if eval(op.args(0), symbolValue, guesses, registers, memo) == 1 || eval(op.args(1), symbolValue, guesses, registers, memo) == 1 then 1 else 0
-                case "not" => if eval(op.args(0), symbolValue, guesses, registers, memo) == 1 then 0 else 1
-                case "ite" => if eval(op.args(0), symbolValue, guesses, registers, memo) == 1 then eval(op.args(1), symbolValue, guesses, registers, memo) else eval(op.args(2), symbolValue, guesses, registers, memo)
-                case other => throw new RuntimeException(s"runDirectPvwaa: unsupported op '$other'"),
-      )
-
-    def allGuessCombinations: Iterator[Map[Int, Int]] =
-      val ids = guessInputIds.toList
-      (0 until (1 << ids.length)).iterator.map(mask => ids.zipWithIndex.map((id, i) => id -> ((mask >> i) & 1)).toMap)
-
-    var frontier = Set(stateIds.map(id => id -> consts(registerInit(id))).toMap)
-    symbolIndices.map { symbol =>
-      val nextFrontier = scala.collection.mutable.Set.empty[Map[Int, Int]]
-      for registers <- frontier; guesses <- allGuessCombinations do
-        val memo = scala.collection.mutable.Map.empty[Int, Int]
-        nextFrontier += stateIds.map(id => id -> eval(registerNext(id), symbol, guesses, registers, memo)).toMap
-      frontier = nextFrontier.toSet
-      // `bad` depends only on register values (no symbol/guesses of its
-      // own), so any fixed dummy values suffice to evaluate it here.
-      frontier.exists(registers => eval(badId, 0, Map.empty, registers, scala.collection.mutable.Map.empty) == 1)
-    }.toList
-
   /** A tiny binary-AIGER interpreter covering exactly what `Aiger` emits
     * (text header/latch-next-literals/output, then delta-encoded AND gates,
     * then a `c` comment section it ignores), used to check the encoder —
@@ -262,6 +178,134 @@ class TranslatorSuite extends munit.FunSuite:
     assert(Brasp.accepts(program, IndexedSeq("b", "a", "a")))
   }
 
+  /** Every shape `BraspNormalize` has to get right, each paired with what
+    * makes it interesting. The suite below checks all of them two ways: the
+    * rewritten program agrees with the original subprogram-by-subprogram, and
+    * the compiled 2LTL agrees with the B-RASP evaluator.
+    */
+  private val leftmostPrograms: List[(String, String)] = List(
+    "witness-only score (no case split needed)" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |h = leftmost(!is_bos@j & is_a@j, is_b@i | is_a@j)
+        |output h""".stripMargin,
+    "query-dependent score (the case split)" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |h = leftmost(is_a@i & !is_bos@j | is_b@i & is_b@j, is_a@j)
+        |output h""".stripMargin,
+    "score that is constantly true (the witness is BOS)" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |h = leftmost(true, is_bos@j)
+        |output h""".stripMargin,
+    "score that is constantly false (no candidate ever)" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |h = leftmost(false, true)
+        |output h""".stripMargin,
+    "score with a residual that drops out as false" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |h = leftmost(is_a@i & is_b@i & is_a@j, !is_b@j)
+        |output h""".stripMargin,
+    "two leftmost nodes sharing one residual (the marker cache)" ->
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |h1 = leftmost(!is_bos@j, is_a@j)
+        |h2 = leftmost(!is_bos@j, is_b@j)
+        |accept = h1 & !h2 | h2 & !h1
+        |output accept""".stripMargin,
+    "leftmost attending to an earlier leftmost" ->
+      """alphabet a b c
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |h1 = leftmost(!is_bos@j, is_a@j)
+        |h2 = leftmost(h1@j & !is_bos@j, is_b@i | is_b@j)
+        |accept = h1 | h2
+        |output accept""".stripMargin,
+    "a name the generated subprograms would otherwise collide with" ->
+      """alphabet a b
+        |is_bos = bos
+        |h_seen = symbol a
+        |h_first = symbol b
+        |h = leftmost(!is_bos@j, h_seen@j | h_first@i)
+        |output h""".stripMargin,
+  )
+
+  test("leftmost normalization preserves every subprogram at every position") {
+    for (label, source) <- leftmostPrograms do
+      val program = BraspText.parse(source)
+      val normalized = BraspNormalize.leftmostToRightmost(program)
+      assert(BraspNormalize.hasLeftmost(program), s"$label: fixture has no leftmost node to normalize")
+      assert(!BraspNormalize.hasLeftmost(normalized), s"$label: normalization left a leftmost node behind")
+      assertEquals(normalized.output, program.output, label)
+      // Subprogram-by-subprogram, not just at the output: the rewrite adds
+      // definitions but must not disturb any name the input already had,
+      // since later subprograms (and callers) still read them.
+      val alphabet = program.alphabet.get
+      for
+        length <- 0 until 6
+        word <- wordsOfLength(length, alphabet)
+      do
+        val original = Brasp.evaluate(program, word.toIndexedSeq)
+        val rewritten = Brasp.evaluate(normalized, word.toIndexedSeq)
+        for
+          name <- program.subprograms.map(_.name)
+          position <- 0 to length
+        do assertEquals(rewritten.at(name, position), original.at(name, position), s"$label: $name@$position word=$word")
+  }
+
+  test("leftmost programs compile to 2LTL that agrees with the B-RASP evaluator") {
+    for (label, source) <- leftmostPrograms do
+      val program = BraspText.parse(source)
+      val past = BraspToLtl.translateProgram(program)
+      val future = Translator.mirrorToFuture(past)
+      val automaton = Pvwaa.fromFuture2ltl(future)
+      val booleanAutomaton = BooleanAutomaton.fromForwardPvwaa(automaton)
+      for
+        length <- 0 until 5
+        word <- wordsOfLength(length, program.alphabet.get)
+      do
+        val expected = Brasp.accepts(program, word.toIndexedSeq)
+        assertEquals(Ltl.evaluate(past, word.toIndexedSeq), expected, s"$label: past, word=$word")
+        assertEquals(Ltl.evaluate(future, word.reverse.toIndexedSeq), expected, s"$label: future, word=$word")
+        assertEquals(BooleanAutomaton.accepts(booleanAutomaton, word.toIndexedSeq), expected, s"$label: automaton, word=$word")
+  }
+
+  test("a leftmost score too tangled to normalize is refused with an explanation, not a bare 'normalize first'") {
+    val program = BraspText.parse(
+      """alphabet a b
+        |is_bos = bos
+        |is_a = symbol a
+        |is_b = symbol b
+        |p = rightmost(is_a@j, true)
+        |q = rightmost(is_b@j, true)
+        |h = leftmost(is_a@i & is_a@j | is_b@i & is_b@j | p@i & p@j | q@i & q@j, true)
+        |output h""".stripMargin
+    )
+    // Four genuinely relevant query-position variables, none of which the
+    // split can fold away: 16 cases against a budget of 4.
+    val error = intercept[TranslationError](BraspNormalize.leftmostToRightmost(program, maxScoreCases = 4))
+    assert(error.message.startsWith("h:"), error.message)
+    assert(error.message.contains("query position"), error.message)
+    assert(error.message.contains("rightmost attention"), error.message)
+    // ... and the real budget is nowhere near that, so the same program
+    // compiles on the ordinary path.
+    assert(!BraspNormalize.hasLeftmost(BraspNormalize.leftmostToRightmost(program)))
+  }
+
   test("inclusion reduces to counterexample emptiness") {
     val endsInA = Brasp.fromJson(
       obj(
@@ -389,7 +433,7 @@ class TranslatorSuite extends munit.FunSuite:
     // dot_depth uses its witness variable in the ordinary one-variable way,
     // so the case split is vacuous and the translation should shrink rather
     // than blow up.
-    val text = readExample("examples/ltl/dot_depth__k-3__sigma-2.ltl")
+    val text = readExample("examples/ltl/dot_depth__k-5__sigma-2.ltl")
     assertOneVariableTranslation(text, maxLength = 5)
   }
 
@@ -400,337 +444,6 @@ class TranslatorSuite extends munit.FunSuite:
     val text = readExample("examples/ltl/two_var__monotone_past__sigma-16.ltl")
     val error = intercept[TwoLtlToOneVariable.TranslationTooLarge](TwoLtlToOneVariable.translate(LtlText.parse(text), cap = 1 << 16))
     assert(error.getMessage.contains("disjuncts") || error.getMessage.contains("nodes"), error.getMessage)
-  }
-
-  test("DirectPvwaa.generateSafety matches Pvwaa.accepts prefix-by-prefix") {
-    val automaton = pvwaaFromLtl(sameLetterBeforeLtl)
-    val model = DirectPvwaa.generateSafety(automaton)
-    assert(model.contains("bad "))
-    assert(model.contains("input "))
-    val alphabet = automaton.alphabet
-
-    for
-      length <- 1 until 5
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      // this circuit reads the future-mirrored word directly (see
-      // DirectPvwaa's own doc-comment) -- compare against Pvwaa.accepts
-      // un-reversed, the same direction the circuit itself consumes.
-      val expected = (1 to word.length).map(k => Pvwaa.accepts(automaton, word.take(k).toIndexedSeq)).toList
-      assertEquals(runDirectPvwaa(model, indices), expected, s"word=$word")
-  }
-
-  test("DirectPvwaa.emptyWordAccepted matches Pvwaa.accepts on the empty word") {
-    val automaton = pvwaaFromLtl(sameLetterBeforeLtl)
-    assertEquals(DirectPvwaa.emptyWordAccepted(automaton), Pvwaa.accepts(automaton, IndexedSeq.empty))
-  }
-
-  /** $L = \{\varepsilon\}$: `f_3` is "some position precedes me", so
-    * negating it at `i = |w|` accepts exactly the zero-length word.
-    */
-  private val onlyEmptyWordLtl =
-    """logic past-strict
-      |alphabet a b
-      |
-      |f_0 := sym(a)@i
-      |f_1 := !(f_0@i)
-      |f_2 := !((f_0@i & f_1@i))
-      |f_3 := P(f_2@j)
-      |f_4 := !(f_3@i)
-      |
-      |output := f_4@i
-      |evaluate at i = |w| (the final input position)
-      |""".stripMargin
-
-  test("the empty word is decided consistently by every path when it is the only accepted word") {
-    // The case where mishandling the empty word is *invisible* to the
-    // solver-facing half of every backend: no nonempty word is accepted, so
-    // the hardware models are all correctly unsat, and the whole verdict
-    // rests on the separately-computed empty-word answer. The existing
-    // test above pairs `false` with `false` and would pass even if that
-    // answer were hardwired.
-    val pvwaa = pvwaaFromLtl(onlyEmptyWordLtl)
-    val booleanAutomaton = BooleanAutomaton.fromForwardPvwaa(pvwaa)
-
-    assert(Pvwaa.accepts(pvwaa, IndexedSeq.empty), "epsilon must be accepted by the reference semantics")
-    assertEquals(DirectPvwaa.emptyWordAccepted(pvwaa), true)
-    assertEquals(BooleanAutomaton.accepts(booleanAutomaton, IndexedSeq.empty), true)
-    // `emptyBad`, as every backend's verdict computes it.
-    assertEquals(BooleanAutomaton.diagonal(booleanAutomaton, booleanAutomaton.initial)(pvwaa.initialState), true)
-
-    for
-      length <- 1 until 5
-      word <- wordsOfLength(length, pvwaa.alphabet)
-    do
-      assert(!Pvwaa.accepts(pvwaa, word.toIndexedSeq), s"word=$word must be rejected")
-      assert(!BooleanAutomaton.accepts(booleanAutomaton, word.reverse.toIndexedSeq), s"word=$word must be rejected")
-  }
-
-  /** top --goto--> mid --carry--> leaf: `mid` is not symbol-constant (it
-    * has its own Carry) -- the shape `Hist`-based formulas produce, which
-    * the `--direct` backend used to reject outright (see git history) and
-    * now handles via a per-state "root" register (see the class doc-comment
-    * on `DirectPvwaa` and the comment above `needsRoot` in
-    * `generateSafety`). Small enough for both interpreters' exhaustive
-    * guess search at a useful word length, so both encodings test the root
-    * mechanism on it.
-    */
-  private def gotoTargetAutomaton(alphabet: List[String]): ForwardPVWAA =
-    val transitions = Map(
-      "top"  -> PositiveFormula.TransitionAtom("mid", Action.Goto),
-      "mid"  -> PositiveFormula.TransitionAtom("leaf", Action.Carry),
-      "leaf" -> PositiveFormula.SymbolTest(AtomKind.SymbolAtom, Some("a"), false),
-    )
-    ForwardPVWAA(alphabet, List("top", "mid", "leaf"), transitions, "top", Set("leaf"), Map("top" -> 2, "mid" -> 1, "leaf" -> 0))
-
-  test("DirectPvwaa.generateSafety handles a goto-target with its own Carry/Leave structure") {
-    val automaton = gotoTargetAutomaton(List("a", "b"))
-    val model = DirectPvwaa.generateSafety(automaton)
-    val alphabet = automaton.alphabet
-
-    for
-      length <- 1 until 6
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      val expected = (1 to word.length).map(k => Pvwaa.accepts(automaton, word.take(k).toIndexedSeq)).toList
-      assertEquals(runDirectPvwaa(model, indices), expected, s"word=$word")
-  }
-
-  // `runDirectPvwaa` existentially enumerates *all* `2^(#states)` guess
-  // combinations per step (see its own doc-comment) -- fine for the 3-state
-  // automaton above, but `nestedGotoBrasp`/`atLeastTwoABrasp` have 8-10
-  // states, so kept to a shorter word-length bound here than the other
-  // tests in this file use, to keep this suite's own runtime bounded.
-  private val nestedGotoBrasp =
-    """alphabet a b
-      |
-      |is_a = symbol a
-      |a_before = rightmost(is_a@j, true)
-      |check = is_a & a_before
-      |outer = rightmost(check@j, true)
-      |
-      |output outer
-      |""".stripMargin
-
-  test("DirectPvwaa.generateSafety matches Pvwaa.accepts on a real goto-target-with-Carry/Leave program") {
-    // `check`'s own transitions goto `a_before`, whose own transitions
-    // carry/leave (an `Until`) -- exactly the shape `checkGotoTargetsAreSimple`
-    // used to reject, and `check` is itself later `Carry`'d into by
-    // `outer`'s own witness search, so `check`'s own root is not always
-    // position 0 either.
-    val automaton = pvwaaFromBrasp(nestedGotoBrasp)
-    val model = DirectPvwaa.generateSafety(automaton)
-    val alphabet = automaton.alphabet
-
-    for
-      length <- 1 until 3
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      val expected = (1 to word.length).map(k => Pvwaa.accepts(automaton, word.take(k).toIndexedSeq)).toList
-      assertEquals(runDirectPvwaa(model, indices), expected, s"word=$word")
-  }
-
-  private val atLeastTwoABrasp =
-    """alphabet a b
-      |
-      |is_a = symbol a
-      |a_before = rightmost(is_a@j & true | !!is_a@j, is_a@j & true)
-      |two_a_before = rightmost(is_a@j & a_before@j | !!is_a@j, is_a@j & a_before@j)
-      |last_is_second_a = is_a & a_before
-      |at_least_two_a = two_a_before | last_is_second_a
-      |
-      |output at_least_two_a
-      |""".stripMargin
-
-  test("DirectPvwaa.generateSafety matches Pvwaa.accepts on at_least_two_a (Until nested in Until's operand)") {
-    // the actual motivating example: `last_is_second_a` gotos `a_before`,
-    // which has its own Carry/Leave (from its own `rightmost`); `a_before`
-    // is also `Carry`'d into directly by `two_a_before`'s witness search,
-    // and `two_a_before`/`last_is_second_a` are themselves goto-targets of
-    // the top-level `at_least_two_a`. Kept to length 1 only -- at 10
-    // states `runDirectPvwaa`'s exhaustive `2^states`-per-step guess
-    // search already takes ~20s at length 2 -- the mechanism itself is
-    // exhaustively covered above (the hand-built automaton and
-    // `nestedGotoBrasp`); deeper coverage on this exact formula (and the
-    // `dot_depth`/`y_depth` families, too large to brute-force here at
-    // all) was cross-checked out-of-band instead: `--direct`'s BTOR2 model
-    // run through rIC3 manually, against the independent `--run-native`
-    // backend, and `tools.GotoOverlapCheck` against `Pvwaa.accepts`
-    // directly.
-    val automaton = pvwaaFromBrasp(atLeastTwoABrasp)
-    val model = DirectPvwaa.generateSafety(automaton)
-    val alphabet = automaton.alphabet
-
-    for
-      length <- 1 until 2
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      val expected = (1 to word.length).map(k => Pvwaa.accepts(automaton, word.take(k).toIndexedSeq)).toList
-      assertEquals(runDirectPvwaa(model, indices), expected, s"word=$word")
-  }
-
-  /** `runDirectPvwaa`'s AIGER counterpart: interprets the binary model
-    * `Aiger.generateSafetyDirect` emits — byte format included, same as
-    * `runAiger` — existentially searching the per-state guess inputs the
-    * same way `runDirectPvwaa` does for the BTOR2 sibling.
-    *
-    * Two differences from `runAiger` force a separate interpreter rather
-    * than a parameter on that one. This model has `width + |Q|` inputs, not
-    * just the symbol's bits, and the extra ones are existentially
-    * quantified rather than driven; and its output depends on those guesses
-    * (it is computed from the *next* register values — see
-    * `generateSafetyDirect`'s doc-comment), so `bad` has to be evaluated
-    * per guess combination rather than once per step.
-    *
-    * Returns, for a run over `symbolIndices`, whether some guess path makes
-    * the output hold after consuming each prefix.
-    */
-  private def runDirectAiger(model: Array[Byte], width: Int, symbolIndices: IndexedSeq[Int]): List[Boolean] =
-    var pos = 0
-    def readLine(): String =
-      val start = pos
-      while model(pos) != '\n'.toByte do pos += 1
-      val line = new String(model, start, pos - start, java.nio.charset.StandardCharsets.US_ASCII)
-      pos += 1
-      line
-
-    val Array(_, i, l, o, a) = readLine().split("\\s+").tail.map(_.toInt)
-    val latchNextLits = (0 until l).map(_ => readLine().trim.toInt)
-    val outputLits = (0 until o).map(_ => readLine().trim.toInt)
-
-    def decodeDelta(): Int =
-      var value = 0
-      var shift = 0
-      var more = true
-      while more do
-        val byte = model(pos) & 0xff
-        pos += 1
-        value |= (byte & 0x7f) << shift
-        shift += 7
-        more = (byte & 0x80) != 0
-      value
-
-    val andOf = (0 until a).map { k =>
-      val outLit = 2 * (i + l + k + 1)
-      val rhsHigh = outLit - decodeDelta()
-      val rhsLow = rhsHigh - decodeDelta()
-      outLit -> (rhsHigh, rhsLow)
-    }.toMap
-
-    val latchVars = (0 until l).map(k => 2 * (i + k + 1)).toVector
-    val guessVars = (width until i).map(bitPos => 2 * (bitPos + 1)).toVector
-
-    def valueOf(literal: Int, latchState: Map[Int, Int], inputVals: Map[Int, Int], memo: scala.collection.mutable.Map[Int, Int]): Int =
-      if literal == 0 then 0
-      else if literal == 1 then 1
-      else
-        val v = literal & ~1
-        val negated = literal & 1
-        val raw = memo.getOrElseUpdate(
-          v,
-          if latchState.contains(v) then latchState(v)
-          else if inputVals.contains(v) then inputVals(v)
-          else
-            andOf.get(v) match
-              case Some((aLit, bLit)) =>
-                valueOf(aLit, latchState, inputVals, memo) & valueOf(bLit, latchState, inputVals, memo)
-              case None => throw new RuntimeException(s"runDirectAiger: unknown variable $v"),
-        )
-        raw ^ negated
-
-    var frontier = Set(latchVars.map(_ -> 0).toMap) // every latch resets to 0
-    symbolIndices.map { symbol =>
-      val symbolVals = (0 until width).map(bitPos => 2 * (bitPos + 1) -> ((symbol >> bitPos) & 1)).toMap
-      var accepted = false
-      val nextFrontier = scala.collection.mutable.Set.empty[Map[Int, Int]]
-      for
-        latchState <- frontier
-        mask <- 0 until (1 << guessVars.length)
-      do
-        val inputVals = symbolVals ++ guessVars.zipWithIndex.map((v, k) => v -> ((mask >> k) & 1))
-        val memo = scala.collection.mutable.Map.empty[Int, Int]
-        if valueOf(outputLits.head, latchState, inputVals, memo) == 1 then accepted = true
-        nextFrontier += latchVars.zip(latchNextLits).map((v, nextLit) => v -> valueOf(nextLit, latchState, inputVals, memo)).toMap
-      frontier = nextFrontier.toSet
-      accepted
-    }.toList
-
-  private def assertDirectAigerMatchesPvwaa(automaton: ForwardPVWAA, maxLength: Int): Unit =
-    val model = Aiger.generateSafetyDirect(automaton)
-    val alphabet = automaton.alphabet
-    val width = if alphabet.length <= 1 then 1 else 32 - Integer.numberOfLeadingZeros(alphabet.length - 1)
-    for
-      length <- 1 to maxLength
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      // Same direction as the BTOR2 sibling: this circuit consumes the
-      // future-mirrored word the PVWAA itself reads, so `Pvwaa.accepts` is
-      // compared un-reversed.
-      val expected = (1 to word.length).map(k => Pvwaa.accepts(automaton, word.take(k).toIndexedSeq)).toList
-      assertEquals(runDirectAiger(model, width, indices), expected, s"word=$word")
-
-  test("Aiger.generateSafetyDirect matches Pvwaa.accepts prefix-by-prefix") {
-    assertDirectAigerMatchesPvwaa(pvwaaFromLtl(sameLetterBeforeLtl), maxLength = 4)
-  }
-
-  test("Aiger.generateSafetyDirect matches Pvwaa.accepts on a goto-target with its own Carry/Leave structure") {
-    // The `root`-register mechanism (see `DirectPvwaa`'s doc-comment), the
-    // part of this encoding least determined by the AIGER format itself.
-    assertDirectAigerMatchesPvwaa(gotoTargetAutomaton(List("a", "b")), maxLength = 5)
-  }
-
-  test("Aiger.generateSafetyDirect matches Pvwaa.accepts on at_least_two_a (Until nested in Until's operand)") {
-    // Same automaton, and same reason for the short word bound, as the
-    // BTOR2 sibling's own test above: 10 states means `2^10` guess
-    // combinations per step in the interpreter.
-    assertDirectAigerMatchesPvwaa(pvwaaFromBrasp(atLeastTwoABrasp), maxLength = 1)
-  }
-
-  test("both AIGER encoders handle a non-power-of-two alphabet") {
-    // AIGER has no `constraint` line, so a 3-symbol alphabet (2 bits, one
-    // unused pattern) is kept honest by the sticky `oor` latch instead. If
-    // `oor` were missing, the spare pattern `11` would be a symbol
-    // satisfying no test, and the run would diverge from `Pvwaa.accepts`.
-    val automaton = gotoTargetAutomaton(List("a", "b", "c"))
-    assertDirectAigerMatchesPvwaa(automaton, maxLength = 4)
-    // The determinized encoder now takes the same alphabet, by the same
-    // mechanism; the two must agree on it.
-    val determinized = Aiger.generateSafety(BooleanAutomaton.fromForwardPvwaa(automaton))
-    val reverse = BooleanAutomaton.fromForwardPvwaa(automaton)
-    for
-      length <- 1 until 5
-      word <- wordsOfLength(length, automaton.alphabet)
-    do
-      val indices = word.map(automaton.alphabet.indexOf).toIndexedSeq
-      val expected = (1 to word.length).map(k => BooleanAutomaton.accepts(reverse, word.take(k).toIndexedSeq)).toList
-      assertEquals(runAiger(determinized, indices), expected, s"word=$word")
-  }
-
-  test("Aiger.generateSafetyDirect and DirectPvwaa.generateSafety accept the same words") {
-    // The two encodings of the same construction, cross-checked against
-    // each other rather than only against `Pvwaa.accepts`: a shared
-    // misreading of the PVWAA would show up as agreement with each other
-    // but disagreement with `Pvwaa.accepts` above, while a divergence
-    // introduced by bit-blasting shows up here.
-    val automaton = pvwaaFromLtl(sameLetterBeforeLtl)
-    val alphabet = automaton.alphabet
-    val aigerModel = Aiger.generateSafetyDirect(automaton)
-    val btorModel = DirectPvwaa.generateSafety(automaton)
-    // Both interpreters enumerate all `2^|states|` guesses per step, so the
-    // cost is `64^length` here; length 3 already exercises every branch of
-    // the encoding and keeps this comfortably inside munit's timeout, which
-    // length 4 was starting to brush against.
-    for
-      length <- 1 to 3
-      word <- wordsOfLength(length, alphabet)
-    do
-      val indices = word.map(alphabet.indexOf).toIndexedSeq
-      assertEquals(runDirectAiger(aigerModel, 1, indices), runDirectPvwaa(btorModel, indices), s"word=$word")
   }
 
   // A single "hub" state that directly `goto`s 30 other (strictly
@@ -1058,79 +771,83 @@ class TranslatorSuite extends munit.FunSuite:
     assert(unknown.contains("--native-max-states"))
   }
 
+  /** The shared end-to-end fixture for the `--run-abc`, `--run-auto` and
+    * `--run-native` checks below: a program built around a `leftmost` head,
+    * so every backend is exercised on something `BraspNormalize` had to
+    * rewrite before it could be compiled at all.
+    */
+  private val leftmostExample = "examples/brasp/leftmost__first_and_last_a.brasp"
+
+  /** ABC lives beside the checkout, at `../abc/abc`. A git worktree sits two
+    * levels deeper than the checkout it belongs to, so look through every
+    * ancestor rather than only the immediate parent -- otherwise every
+    * end-to-end ABC check below silently skips whenever the work happens in
+    * one. Callers pass the result on with `--abc-bin`, since `Translator`'s
+    * own default only looks at the immediate parent.
+    */
+  private def abcBinary(): Option[File] =
+    Iterator
+      .iterate(new File(System.getProperty("user.dir")).getAbsoluteFile)(_.getParentFile)
+      .takeWhile(_ != null)
+      .map(directory => new File(directory, "abc/abc"))
+      .find(candidate => candidate.isFile && candidate.canExecute)
+
   private def runCapturingOutput(args: Array[String]): (Int, String) =
     val buffer = new java.io.ByteArrayOutputStream()
     val exitCode = Console.withOut(new java.io.PrintStream(buffer, true, "UTF-8"))(Translator.run(args))
     (exitCode, buffer.toString("UTF-8"))
 
+  test("--equivalent --run-abc checks a program that uses leftmost attention") {
+    val abc = abcBinary()
+    assume(abc.isDefined, "ABC binary not found in any ancestor directory of the working directory")
+    // The whole point of the fixture: if it ever loses its leftmost node,
+    // this test would keep passing while checking nothing.
+    assert(
+      BraspNormalize.hasLeftmost(BraspText.parse(readExample(leftmostExample))),
+      s"$leftmostExample no longer uses leftmost attention",
+    )
+
+    val abcArgs = Array("--run-abc", "--abc-bin", abc.get.getPath)
+
+    // Same language, one written with leftmost attention and one without:
+    // a normalization that changed the language could not prove this.
+    val (provedCode, provedOut) =
+      runCapturingOutput(Array("--equivalent", leftmostExample, "examples/brasp/spec__first_and_last_a.brasp") ++ abcArgs)
+    assert(provedCode != 2, s"translator-level error: $provedOut")
+    assert(provedOut.contains("ABC: PROVED"), provedOut)
+
+    // ... and the other direction, so a vacuously-provable encoding cannot
+    // pass the check above: `spec__last_a` drops the first-symbol constraint,
+    // so `ba` tells the two apart.
+    val (differCode, differOut) =
+      runCapturingOutput(Array("--equivalent", leftmostExample, "examples/brasp/spec__last_a.brasp") ++ abcArgs)
+    assert(differCode != 2, s"translator-level error: $differOut")
+    assert(differOut.contains("ABC: NOT PROVED"), differOut)
+  }
+
   test("--run-auto matches --run-native's own verdict when native's budget is enough") {
-    val (nativeCode, nativeOut) = runCapturingOutput(Array("examples/brasp/last_a.brasp", "--run-native"))
-    val (autoCode, autoOut) = runCapturingOutput(Array("examples/brasp/last_a.brasp", "--run-auto"))
+    val (nativeCode, nativeOut) = runCapturingOutput(Array(leftmostExample, "--run-native"))
+    val (autoCode, autoOut) = runCapturingOutput(Array(leftmostExample, "--run-auto"))
+    assert(nativeCode != 2, s"translator-level error: $nativeOut")
     assertEquals(autoCode, nativeCode)
     assertEquals(autoOut, nativeOut)
   }
 
   test("--run-auto escalates to ABC pdr when native's budget is too small, agreeing with native's own full-budget verdict") {
-    val abcBin = new File(new File(System.getProperty("user.dir")).getParentFile, "abc/abc")
-    assume(abcBin.isFile && abcBin.canExecute, s"ABC binary not found at $abcBin")
+    val abc = abcBinary()
+    assume(abc.isDefined, "ABC binary not found in any ancestor directory of the working directory")
 
-    val (_, nativeOut) = runCapturingOutput(Array("examples/brasp/last_a.brasp", "--run-native"))
+    val (nativeCode, nativeOut) = runCapturingOutput(Array(leftmostExample, "--run-native"))
+    assert(nativeCode != 2, s"translator-level error: $nativeOut")
     def isProved(output: String): Boolean = output.contains("PROVED —") && !output.contains("NOT PROVED")
 
-    val (autoCode, autoOut) = runCapturingOutput(Array("examples/brasp/last_a.brasp", "--run-auto", "--native-max-states", "1"))
+    val (autoCode, autoOut) =
+      runCapturingOutput(
+        Array(leftmostExample, "--run-auto", "--native-max-states", "1", "--abc-bin", abc.get.getPath)
+      )
     assert(autoOut.contains("ABC:"), s"expected --run-auto to have escalated to ABC, got: $autoOut")
     assert(autoCode != 2, s"translator-level error, got: $autoOut")
     assertEquals(isProved(autoOut), isProved(nativeOut))
-  }
-
-  /** `--direct --run-abc` (the non-determinized AIGER model,
-    * `Aiger.generateSafetyDirect`) against `--run-native` (the determinized
-    * reachability search) — two encodings, two solvers, one question.
-    *
-    * This is the check the in-process interpreters above cannot make.
-    * `runDirectAiger` shares this project's own reading of the AIGER byte
-    * format, so a format-level mistake — a miscounted header field, latches
-    * emitted out of variable order — would be invisible to it and visible
-    * only to a real AIGER reader. Both verdict directions are covered
-    * deliberately: a `PROVED` case is where an encoding bug is dangerous
-    * rather than merely wrong, since an over-constrained model proves
-    * everything.
-    */
-  private def assertDirectAbcAgreesWithNative(label: String, args: String*): Unit =
-    val abcBin = new File(new File(System.getProperty("user.dir")).getParentFile, "abc/abc")
-    assume(abcBin.isFile && abcBin.canExecute, s"ABC binary not found at $abcBin")
-    def isProved(output: String): Boolean = output.contains("PROVED —") && !output.contains("NOT PROVED")
-    val (nativeCode, nativeOut) = runCapturingOutput(args.toArray :+ "--run-native")
-    val (abcCode, abcOut) = runCapturingOutput(args.toArray ++ Array("--direct", "--run-abc"))
-    assert(nativeCode != 2, s"$label: translator-level error from --run-native: $nativeOut")
-    assert(abcCode != 2, s"$label: translator-level error from --direct --run-abc: $abcOut")
-    assert(abcOut.contains("ABC:"), s"$label: expected an ABC verdict, got: $abcOut")
-    assertEquals(isProved(abcOut), isProved(nativeOut), s"$label: native said <<$nativeOut>>, ABC said <<$abcOut>>")
-
-  test("--direct --run-abc agrees with --run-native on a nonempty language") {
-    assertDirectAbcAgreesWithNative("last_a safety", "examples/brasp/last_a.brasp")
-  }
-
-  test("--direct --run-abc agrees with --run-native on an empty language (self-equivalence)") {
-    // The PROVED direction: a program is trivially equivalent to itself, so
-    // the counterexample language is empty and both backends must say so.
-    assertDirectAbcAgreesWithNative("last_a equiv-self", "--equivalent", "examples/brasp/last_a.brasp", "examples/brasp/last_a.brasp")
-  }
-
-  test("--direct --run-abc agrees with --run-native on a genuine inclusion that does not hold") {
-    assertDirectAbcAgreesWithNative(
-      "contains_a subset last_a",
-      "--subset",
-      "examples/brasp/last_a.brasp",
-      "examples/brasp/contains_a.brasp",
-    )
-  }
-
-  test("--direct --run-abc exercises the pebble machinery (at_least_two_a)") {
-    // `at_least_two_a` is `DirectPvwaa`'s own motivating shape: a goto
-    // target that has its own Carry/Leave, i.e. the `root` registers doing
-    // real work rather than sitting constant.
-    assertDirectAbcAgreesWithNative("at_least_two_a safety", "examples/brasp/at_least_two_a.brasp")
   }
 
   /** `BooleanAutomaton.conflictWitness` and `reachable` + `witness` decide
@@ -1140,8 +857,7 @@ class TranslatorSuite extends munit.FunSuite:
     * (`sampleAutomaton`, the "hub" automata whose whole point is an
     * explicit-table blow-up neither search should ever hit) and real
     * compiled formulas (`same_letter_before`, `at_least_two_a` — the
-    * latter exercising `Goto`/`Carry` nesting, same as `DirectPvwaa`'s own
-    * motivating example).
+    * latter exercising `Goto`/`Carry` nesting).
     */
   private def assertConflictAgreesWithReachable(automaton: ReverseBooleanAutomaton, maxStates: Int = 4096): Unit =
     val dfa = BooleanAutomaton.reachable(automaton, maxStates)
@@ -1156,6 +872,38 @@ class TranslatorSuite extends munit.FunSuite:
     reachableWitness.foreach { word =>
       assert(BooleanAutomaton.accepts(automaton, word.toIndexedSeq), s"reachable/witness's own witness $word must itself be accepted")
     }
+
+  /** A `rightmost` whose score reads an earlier `rightmost`: `check`'s
+    * transitions goto `a_before`, whose own transitions carry/leave, and
+    * `check` is itself carried into by `outer`'s witness search. Nested
+    * `Goto`/`Carry`, i.e. the shape `Hist`-based formulas produce.
+    */
+  private val nestedGotoBrasp =
+    """alphabet a b
+      |
+      |is_a = symbol a
+      |a_before = rightmost(is_a@j, true)
+      |check = is_a & a_before
+      |outer = rightmost(check@j, true)
+      |
+      |output outer
+      |""".stripMargin
+
+  /** The same nesting one level deeper (an `Until` inside an `Until`'s
+    * operand): `last_is_second_a` gotos `a_before`, which has its own
+    * Carry/Leave and is also carried into directly by `two_a_before`.
+    */
+  private val atLeastTwoABrasp =
+    """alphabet a b
+      |
+      |is_a = symbol a
+      |a_before = rightmost(is_a@j & true | !!is_a@j, is_a@j & true)
+      |two_a_before = rightmost(is_a@j & a_before@j | !!is_a@j, is_a@j & a_before@j)
+      |last_is_second_a = is_a & a_before
+      |at_least_two_a = two_a_before | last_is_second_a
+      |
+      |output at_least_two_a
+      |""".stripMargin
 
   test("BooleanAutomaton.conflictWitness agrees with reachable+witness on hand-built automata") {
     assertConflictAgreesWithReachable(sampleAutomaton())
@@ -1298,7 +1046,7 @@ class TranslatorSuite extends munit.FunSuite:
     assert(Ltl.evaluate(futureEventually, IndexedSeq("a", "b")))
   }
 
-  test("rejects forward reference and leftmost compilation") {
+  test("rejects a forward reference, but compiles leftmost attention") {
     intercept[TranslationError] {
       BraspToLtl.translate(
         obj(
@@ -1307,21 +1055,27 @@ class TranslatorSuite extends munit.FunSuite:
         )
       )
     }
-    intercept[TranslationError] {
-      BraspToLtl.translate(
-        obj(
-          "alphabet" -> arr(str("a")),
-          "program" -> arr(
-            obj(
-              "name" -> str("p"),
-              "op" -> str("leftmost"),
-              "score" -> obj("op" -> str("const"), "value" -> bool(true)),
-              "value" -> obj("op" -> str("const"), "value" -> bool(true)),
-            )
-          ),
-        )
+    // `leftmost` used to be rejected here; `BraspNormalize` now rewrites it
+    // into rightmost attention on the way in, so the JSON front end compiles
+    // it like anything else.
+    val dag = BraspToLtl.translate(
+      obj(
+        "alphabet" -> arr(str("a")),
+        "program" -> arr(
+          obj(
+            "name" -> str("p"),
+            "op" -> str("leftmost"),
+            "score" -> obj("op" -> str("const"), "value" -> bool(true)),
+            "value" -> obj("op" -> str("const"), "value" -> bool(true)),
+          )
+        ),
       )
-    }
+    )
+    assertEquals(dag.output, Formula.Reference("p", Position.I))
+    // `leftmost(true, true)` is "some position precedes i", so it holds
+    // exactly on the nonempty words.
+    assert(!Ltl.evaluate(dag, IndexedSeq.empty))
+    assert(Ltl.evaluate(dag, IndexedSeq("a")))
   }
 
   test("Ltl.mirror is stack-safe on a formula nested far deeper than any JVM default thread stack") {
