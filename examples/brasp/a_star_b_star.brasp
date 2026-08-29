@@ -1,0 +1,12 @@
+# uhat task `a_star_b_star`: no `ba` factor, i.e. every `a` precedes every `b`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_b = rightmost(true, is_b@j)
+ba_here = is_a & prev_b
+saw_ba = rightmost(ba_here@j, true)
+accept = !ba_here & !saw_ba
+
+output accept

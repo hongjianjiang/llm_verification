@@ -1,0 +1,15 @@
+# uhat task `no_c_before_first_b`: no `c` occurs strictly before the first `b`
+# (vacuously true when there is no `b`, which then forbids `c` altogether).
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+saw_b = rightmost(is_b@j, true)
+# a `c` with no `b` at or before it: a violation, wherever it sits.
+bad_c = is_c & !saw_b
+saw_bad_c = rightmost(bad_c@j, true)
+accept = !bad_c & !saw_bad_c
+
+output accept

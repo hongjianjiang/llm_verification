@@ -1,0 +1,11 @@
+# uhat task `ends_ab`: the word ends with the factor `ab`.
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+# score `true` pins the witness to i-1, so this reads the previous symbol.
+prev_a = rightmost(true, is_a@j)
+accept = is_b & prev_a
+
+output accept

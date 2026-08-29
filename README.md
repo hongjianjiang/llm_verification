@@ -30,8 +30,8 @@ java -jar $JAR examples/ltl/dot_depth__k-800__sigma-2.ltl --one-variable --run-n
 **`ABC`** — keep the pebble, compile to a circuit, model-check it:
 
 ```bash
-java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-1024.ltl --run-abc
-java -jar $JAR examples/brasp/two_var__monotone_past__sigma-256.ltl --run-abc
+java -jar $JAR examples/ltl/two_var__same_letter_before__sigma-256.ltl --run-abc
+java -jar $JAR examples/ltl/two_var__monotone_past__sigma-256.ltl --run-abc
 ```
 
 
@@ -59,7 +59,7 @@ stem>_pvwaa.dot`, `graphs/<input stem>_boolean_automaton.dot`,
 `ltl/<input stem>.ltl` (or `_future.ltl`), and
 `examples/brasp/<input stem>.brasp` respectively — creating the directory if
 needed. Note the last one can collide with a hand-written example source of
-the same input stem (e.g. `at_least_two_a`), in which case the round-tripped
+the same input stem (e.g. `contains_aba`), in which case the round-tripped
 `--brasp` output overwrites it.
 
 ## Examples
@@ -71,27 +71,31 @@ java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --future
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --pvwaa
 java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/last_a.brasp --boolean-automaton
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/ends_in_ab.brasp --word ab
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/at_least_two_a.brasp --ltl > at_least_two_a.ltl
-java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/at_least_two_a.ltl --pvwaa
-java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/at_least_two_a.ltl --brasp
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/ends_ab.brasp --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_aba.brasp --ltl > roundtrip.ltl
+java -jar target/scala-3.5.1/brasp-verification.jar roundtrip.ltl --pvwaa
+java -jar target/scala-3.5.1/brasp-verification.jar roundtrip.ltl --brasp
 sbt test
 ```
 
 Cross-check a word against every compiled stage at once:
 
 ```sh
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_a.brasp --word ab
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_a.brasp --pvwaa --word ab
-java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_a.brasp --boolean-automaton --word ab
+# --word prints a verdict instead of a model, so it does not auto-save the
+# .ltl the second group reads; this first line is what writes it.
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_ab.brasp --ltl
 
-java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/contains_a.ltl --word ab
-java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/contains_a.ltl --pvwaa --word ab
-java -jar target/scala-3.5.1/brasp-verification.jar examples/ltl/contains_a.ltl --boolean-automaton --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_ab.brasp --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_ab.brasp --pvwaa --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar examples/brasp/contains_ab.brasp --boolean-automaton --word ab
+
+java -jar target/scala-3.5.1/brasp-verification.jar ltl/contains_ab.ltl --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar ltl/contains_ab.ltl --pvwaa --word ab
+java -jar target/scala-3.5.1/brasp-verification.jar ltl/contains_ab.ltl --boolean-automaton --word ab
 ```
 
 Check a subset/equivalence property with ABC:
 ```sh
-java -jar target/scala-3.5.1/brasp-verification.jar --run-abc --subset examples/brasp/all_words.brasp examples/brasp/a_is_last.brasp
+java -jar target/scala-3.5.1/brasp-verification.jar --run-abc --subset examples/brasp/last_a.brasp examples/brasp/first_equals_last.brasp
 java -jar target/scala-3.5.1/brasp-verification.jar --run-abc --equivalent examples/brasp/last_a.brasp examples/brasp/last_a.brasp
 ```
