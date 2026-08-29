@@ -167,8 +167,22 @@ object Ltlp:
 
   /** `present`/`future` cells never contain `Since` (only pure-past cells
     * do) — this is exactly the subset `LtlfFormula` already covers, so
-    * translation reuses `Ltlf.compileToFuture` unchanged rather than
-    * needing a second compiler.
+    * translation reuses `Ltlf.compileToFuture` rather than needing a second
+    * compiler.
+    *
+    * The one thing that does not carry across unchanged is `U`. LTLpSeparator's
+    * `U` is **strict** (it excludes "now" — see this object's own doc-comment,
+    * where `Gq` is `!((!q) U true)` and is only a real `G` under that reading),
+    * while `Ltlf.compileToFuture` implements **non-strict** LTLf, in which
+    * `U` includes "now". Mapping one onto the other directly makes every
+    * matrix cell constrain the evaluation point that the original formula
+    * leaves free, so `G(landing -> O request_landing)` wrongly rejects a
+    * trace whose only `landing` sits at position 0.
+    *
+    * `phi U_strict psi` is `X(phi U_nonstrict psi)` with a *strong* `Next`:
+    * both say "some j > i satisfies `psi`, with `phi` throughout i < k < j",
+    * and the strong `Next` supplies the "a later position exists at all"
+    * that strictness requires.
     */
   private def toLtlf(formula: LtlpFormula): LtlfFormula = formula match
     case F.True             => LtlfFormula.True
@@ -177,7 +191,7 @@ object Ltlp:
     case F.Not(operand)      => LtlfFormula.Not(toLtlf(operand))
     case F.And(left, right)  => LtlfFormula.And(toLtlf(left), toLtlf(right))
     case F.Or(left, right)   => LtlfFormula.Or(toLtlf(left), toLtlf(right))
-    case F.Until(left, right) => LtlfFormula.Until(toLtlf(left), toLtlf(right))
+    case F.Until(left, right) => LtlfFormula.Next(LtlfFormula.Until(toLtlf(left), toLtlf(right)))
     case F.Since(_, _)       => throw LtlpError(s"a present/future matrix cell must not contain 'S': $formula")
 
   /** Every `Prop` occurring anywhere across the matrix, sorted for a

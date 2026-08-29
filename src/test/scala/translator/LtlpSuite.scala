@@ -47,6 +47,13 @@ class LtlpSuite extends munit.FunSuite:
   private def randomTrace(rng: Random, length: Int): IndexedSeq[(Boolean, Boolean)] =
     IndexedSeq.fill(length)((rng.nextBoolean(), rng.nextBoolean()))
 
+  /** Every trace of the given length, in order. */
+  private def allTraces(length: Int): List[IndexedSeq[(Boolean, Boolean)]] =
+    val steps = List((false, false), (true, false), (false, true), (true, true))
+    (0 until length).foldLeft(List(IndexedSeq.empty[(Boolean, Boolean)])) { (traces, _) =>
+      for trace <- traces; step <- steps yield trace :+ step
+    }
+
   private def encodeSymbol(step: (Boolean, Boolean)): String =
     // propositionsUsed sorts alphabetically: "landing" < "request_landing",
     // matching Ltlf.Builder.alphabet's bitPos-0-is-first-character order.
@@ -57,16 +64,32 @@ class LtlpSuite extends munit.FunSuite:
     val dag = Ltlp.translate(phiMatrixJson)
     assertEquals(dag.logic, Logic.PastStrict)
 
-    val rng = new Random(1234)
+    // Exhaustive, not sampled. The bug this guards -- `Ltlp`'s strict `U`
+    // handed to `Ltlf`'s non-strict compiler, so the evaluation point got
+    // constrained when the original formula leaves it free (see
+    // `Ltlp.toLtlf`) -- shows up only when position 0 carries the sole
+    // `landing`. That is 1 trace in 4 at length 1 but under 9% by length 4,
+    // so 20 random traces per length is not a reliable net for it.
     for
-      length <- 0 until 6
-      _ <- 0 until 20
+      length <- 0 to 4
+      trace <- allTraces(length)
     do
-      val trace = randomTrace(rng, length)
       val expected = originalHolds(trace, 0)
       val word = trace.map(encodeSymbol).reverse // compileToPast mirrors: evaluate on reverse(w)
       val actual = Ltl.evaluate(dag, word)
       assertEquals(actual, expected, s"trace=$trace")
+
+    // Longer traces stay sampled: 4^n exhaustion stops being cheap, but the
+    // shape of the bug is already pinned above.
+    val rng = new Random(1234)
+    for
+      length <- 5 until 8
+      _ <- 0 until 40
+    do
+      val trace = randomTrace(rng, length)
+      val expected = originalHolds(trace, 0)
+      val word = trace.map(encodeSymbol).reverse
+      assertEquals(Ltl.evaluate(dag, word), expected, s"trace=$trace")
   }
 
   test("Ltlp.evalPastOnEmptyHistory matches Ltl.evaluate on a zero-length word") {
