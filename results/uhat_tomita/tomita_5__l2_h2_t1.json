@@ -1,0 +1,21 @@
+{
+  "task": "tomita_5",
+  "source": "",
+  "star_free": false,
+  "layers": 2,
+  "heads": 2,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 0.515152,
+  "train_accuracy": 0.515152,
+  "test_accuracy": 0.5025,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 2,
+  "seconds": 196.6,
+  "program": "alphabet 0 1\n\nis_bos = bos\nis_sym0 = symbol 0\nis_sym1 = symbol 1\nh1_2 = leftmost(is_bos@i & is_sym0@i & !is_sym1@i & is_bos@j & !is_sym0@j & is_sym1@j, is_bos@i & !is_sym1@i & is_bos@j & !is_sym0@j & !is_sym1@j)\nh2_1 = rightmost(!is_sym0@i & !is_bos@j & !is_sym0@j & is_sym1@j, !is_bos@j & !h1_2@j)\naccept = h2_1\n\noutput accept\n"
+}

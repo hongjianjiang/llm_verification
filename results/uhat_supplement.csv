@@ -1,0 +1,5 @@
+task,layers,heads,terms,attention_ops,spec_depth,solved_configs,tried_configs,source
+two_var__monotone_past__sigma-2,1,1,1,1,1,0,0,examples/brasp/two_var__monotone_past__sigma-2.brasp
+two_var__monotone_past__sigma-4,1,1,1,1,1,0,0,examples/brasp/two_var__monotone_past__sigma-4.brasp
+dot_depth__k-5__sigma-2,5,1,2,5,5,2,26,examples/brasp/dot_depth__k-5__sigma-2.brasp
+starts_ab,3,1,2,3,3,10,12,examples/brasp/starts_ab.brasp

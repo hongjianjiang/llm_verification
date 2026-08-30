@@ -284,6 +284,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         record = {
             "task": task.name,
+            # Which definition produced these numbers. A built-in task and a
+            # .brasp spec of the same language share a name but not a sampler
+            # or length plan, so a config chosen on one does not transfer to
+            # the other; without this the two collapse in the sweep CSV.
+            "source": str(args.brasp) if args.brasp else "",
             "star_free": task.star_free,
             "layers": args.layers,
             "heads": args.heads,

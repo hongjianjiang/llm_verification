@@ -33,7 +33,9 @@ set -euo pipefail
 # Passing it this way avoids --export, which this cluster's sbatch rejects
 # with "user env retrieval failed requeued held".
 GRID="${1:-${GRID:-results/uhat_sweep/grid.txt}}"
-OUTDIR="${OUTDIR:-results/uhat_sweep}"
+# Second positional arg, for the same reason as the grid: this cluster's
+# sbatch rejects --export.
+OUTDIR="${2:-${OUTDIR:-results/uhat_sweep}}"
 STEPS="${STEPS:-1500}"
 RESTARTS="${RESTARTS:-3}"
 BATCH="${BATCH:-0}"   # 0 = full batch; set e.g. 512 for the long-word dot_depth cells

@@ -1,0 +1,18 @@
+{
+  "task": "last_a",
+  "star_free": true,
+  "layers": 3,
+  "heads": 1,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 1.0,
+  "train_accuracy": 1.0,
+  "test_accuracy": 1.0,
+  "disagreements": 0,
+  "attention_ops": 0,
+  "seconds": 100.8,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\naccept = is_a & !is_b\n\noutput accept\n"
+}

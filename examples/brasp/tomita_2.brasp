@@ -1,0 +1,12 @@
+# Tomita 2: (10)*  -- starts with 1, ends with 0, never repeats a symbol.
+alphabet 0 1
+
+is_0 = symbol 0
+is_1 = symbol 1
+is_bos = bos
+first_is_1 = leftmost(!is_bos@j, is_1@j)
+same_as_prev = rightmost(true, is_0@i & is_0@j | is_1@i & is_1@j)
+seen_same = rightmost(same_as_prev@j, true)
+accept = is_0 & first_is_1 & !same_as_prev & !seen_same
+
+output accept

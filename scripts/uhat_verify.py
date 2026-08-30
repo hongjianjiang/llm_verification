@@ -19,7 +19,9 @@ import sys
 from pathlib import Path
 
 
-def stem_of(row: dict) -> str:
+def stem_of(row: dict, flat: bool = False) -> str:
+    if flat:
+        return row["task"]
     return f"{row['task']}__l{row['layers']}_h{row['heads']}_t{row['terms']}"
 
 
@@ -30,9 +32,21 @@ def main() -> int:
     parser.add_argument("--learned", type=Path, default=Path("results/uhat_sweep/programs"))
     parser.add_argument("--jar", default="target/scala-3.5.1/brasp-verification.jar")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--flat",
+        action="store_true",
+        help="learned programs are named <task>.brasp, as scripts/uhat_retrain.sh "
+        "writes them, rather than <task>__l<L>_h<H>_t<T>.brasp",
+    )
     args = parser.parse_args()
 
     rows = list(csv.DictReader(args.csv.open()))
+
+    # Two shapes of CSV are accepted: a full sweep (many rows per language,
+    # with accuracies to select on) and a picks file from
+    # `uhat_sweep.py best --out`, which has one already-chosen row per
+    # language and no accuracy columns.
+    preselected = bool(rows) and "test_accuracy" not in rows[0]
 
     best: dict[str, dict] = {}
     for row in rows:
@@ -40,7 +54,9 @@ def main() -> int:
         # set while still missing short words it was trained on, and picking
         # such a row makes the checker report a difference that better model
         # selection would have avoided.
-        if float(row["test_accuracy"]) != 1.0 or float(row["train_accuracy"]) != 1.0:
+        if not preselected and (
+            float(row["test_accuracy"]) != 1.0 or float(row["train_accuracy"]) != 1.0
+        ):
             continue
         spec = args.specs / f"{row['task']}.brasp"
         if not spec.exists():
@@ -49,6 +65,9 @@ def main() -> int:
         # `leftmost` heads used to be steered around here, because the ABC
         # route could not translate them; `BraspNormalize` normalises them to
         # rightmost attention now, so the smallest program wins outright.
+        if preselected:
+            best[key] = ((), row)
+            continue
         rank = (int(row["attention_ops"]), int(row["layers"]), stem_of(row))
         if key not in best or rank < best[key][0]:
             best[key] = (rank, row)
@@ -61,7 +80,7 @@ def main() -> int:
     proved = differ = errored = 0
     for name, row in sorted(best.items()):
         spec = args.specs / f"{name}.brasp"
-        learned = args.learned / f"{stem_of(row)}.brasp"
+        learned = args.learned / f"{stem_of(row, args.flat)}.brasp"
         if not learned.exists():
             print(f"{name:<40} MISSING {learned}")
             errored += 1

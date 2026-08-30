@@ -1,0 +1,13 @@
+# Tomita 7: 0*1*0*1*  -- equivalently, at most one occurrence of the factor 10.
+alphabet 0 1
+
+is_0 = symbol 0
+is_1 = symbol 1
+prev_1 = rightmost(true, is_1@j)
+descent = is_0 & prev_1
+earlier_descent = rightmost(descent@j, true)
+second_descent = descent & earlier_descent
+seen_second = rightmost(second_descent@j, true)
+accept = !second_descent & !seen_second
+
+output accept

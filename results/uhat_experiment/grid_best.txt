@@ -1,0 +1,4 @@
+examples/brasp/two_var__monotone_past__sigma-2.brasp 1 1 1
+examples/brasp/two_var__monotone_past__sigma-4.brasp 1 1 1
+examples/brasp/dot_depth__k-5__sigma-2.brasp 5 1 2
+examples/brasp/starts_ab.brasp 3 1 2

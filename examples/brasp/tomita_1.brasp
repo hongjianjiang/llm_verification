@@ -1,0 +1,8 @@
+# Tomita 1: 1*  -- no 0 occurs anywhere.
+alphabet 0 1
+
+is_0 = symbol 0
+seen_0 = rightmost(is_0@j, true)
+accept = !is_0 & !seen_0
+
+output accept

@@ -1,0 +1,5 @@
+task,layers,heads,terms,attention_ops,spec_depth,solved_configs,tried_configs,source
+tomita_1,1,1,1,1,1,12,12,examples/brasp/tomita_1.brasp
+tomita_2,2,1,2,2,2,7,12,examples/brasp/tomita_2.brasp
+tomita_4,3,1,1,3,3,11,12,examples/brasp/tomita_4.brasp
+tomita_7,3,1,2,3,3,10,12,examples/brasp/tomita_7.brasp

@@ -1,0 +1,13 @@
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+n0 = rightmost(is_c@j & is_a@i | is_a@i & !is_c@j, is_bos@j & is_c@j | is_a@j & !is_b@j)
+n1 = !is_b | !is_b & !is_bos
+n2 = is_bos | is_bos & is_c
+n3 = leftmost(!is_a@j | !n1@i & is_c@j, is_a@i | is_a@i & n1@j)
+accept = n3
+
+output accept

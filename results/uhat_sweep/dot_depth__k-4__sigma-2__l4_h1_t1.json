@@ -1,0 +1,18 @@
+{
+  "task": "dot_depth__k-4__sigma-2",
+  "star_free": true,
+  "layers": 4,
+  "heads": 1,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 0.906128,
+  "train_accuracy": 0.906128,
+  "test_accuracy": 0.86,
+  "disagreements": 0,
+  "attention_ops": 4,
+  "seconds": 188.0,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nh1_1 = rightmost(is_a@i, is_a@i & !is_b@i & !is_a@j)\nh2_1 = rightmost(!is_bos@j & is_a@j & !is_b@j & h1_1@j, !is_bos@j & is_a@j)\nh3_1 = rightmost(h2_1@i & !is_bos@j & is_a@j & !is_b@j & h1_1@j & h2_1@j, !is_bos@j)\nh4_1 = rightmost(!h1_1@i & !h2_1@i & !is_b@j & !h3_1@j, !h1_1@i & !h2_1@i & !is_b@j)\naccept = !is_bos & h2_1 & h3_1 & !h4_1\n\noutput accept\n"
+}

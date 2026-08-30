@@ -1,0 +1,18 @@
+{
+  "task": "a_star_b_star",
+  "star_free": true,
+  "layers": 2,
+  "heads": 1,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 1,
+  "model_hard_accuracy": 0.823593,
+  "train_accuracy": 0.823593,
+  "test_accuracy": 0.772228,
+  "disagreements": 0,
+  "attention_ops": 2,
+  "seconds": 198.1,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nh1_1 = rightmost(true, !is_a@i & is_b@i & !is_a@j)\nh2_1 = rightmost(!h1_1@i & !is_bos@j & !is_a@j & is_b@j, !is_bos@j & !is_a@j)\naccept = !h2_1\n\noutput accept\n"
+}

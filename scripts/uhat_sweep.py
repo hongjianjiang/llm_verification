@@ -30,6 +30,7 @@ TERMS = (1, 2)
 
 FIELDS = [
     "task",
+    "source",
     "star_free",
     "layers",
     "heads",
@@ -85,6 +86,101 @@ def plan_programs(directory: Path, heads_axis, terms_axis, max_alphabet: int, ma
     return lines, skipped
 
 
+def best(csv_path: Path, specs: Path, out: Path | None = None) -> int:
+    """Per-language table: the smallest architecture that actually solved it.
+
+    "Solved" means 1.0 on both the training words and the longer held-out
+    ones. Test alone is not enough -- a program can generalise to long words
+    while still missing a short one it was trained on.
+
+    The `need` column is the specification's own attention depth, the fewest
+    chained attention ops the language can be computed with. Comparing it to
+    the layers the search actually needed says whether training found a
+    minimal program or paid for slack.
+    """
+    paths = csv_path if isinstance(csv_path, list) else [csv_path]
+    rows: list[dict] = []
+    for path in paths:
+        rows.extend(csv.DictReader(path.open()))
+
+    by_task: dict[str, list[dict]] = {}
+    for row in rows:
+        by_task.setdefault(row["task"], []).append(row)
+
+    # A language can appear twice: once trained as a built-in task and once
+    # against its .brasp spec. They share a name but not a sampler or length
+    # plan, so a configuration chosen on one does not transfer to the other.
+    # Where both exist, keep only the spec-trained rows -- the spec is what
+    # the learned program is later verified against.
+    for name, candidates in list(by_task.items()):
+        from_spec = [r for r in candidates if r.get("source")]
+        if from_spec and len(from_spec) != len(candidates):
+            by_task[name] = from_spec
+
+    chosen: list[dict] = []
+
+    print(f"{'language':<38}{'need':>5}{'layers':>7}{'heads':>6}{'terms':>6}"
+          f"{'ops':>5}{'solved':>8}{'median s':>10}")
+    print("-" * 85)
+    for name in sorted(by_task):
+        candidates = by_task[name]
+        spec = specs / f"{name}.brasp"
+        need = ""
+        if spec.exists():
+            try:
+                need = str(describe(spec)["depth"])
+            except Exception:  # noqa: BLE001
+                need = "?"
+        rate = next((float(r["test_positive_rate"]) for r in candidates
+                     if r.get("test_positive_rate")), None)
+        solved = [
+            r for r in candidates
+            if float(r["test_accuracy"]) == 1.0 and float(r["train_accuracy"]) == 1.0
+        ]
+        times = sorted(float(r["seconds"]) for r in candidates)
+        median = times[len(times) // 2] if times else float("nan")
+        if rate is not None and not 0.05 <= rate <= 0.95:
+            print(f"{name:<38}{need:>5}{'  -- inconclusive: test set is ' + format(rate, '.0%') + ' positive':>44}")
+            continue
+        if not solved:
+            top = max(float(r["test_accuracy"]) for r in candidates)
+            print(f"{name:<38}{need:>5}{'  -- unsolved (best test ' + format(top, '.4f') + ')':>38}"
+                  f"{len(candidates):>8}{median:>10.0f}")
+            continue
+        pick = min(solved, key=lambda r: (int(r["layers"]), int(r["heads"]),
+                                          int(r["terms"]), int(r["attention_ops"])))
+        chosen.append({
+            "task": name,
+            "layers": pick["layers"],
+            "heads": pick["heads"],
+            "terms": pick["terms"],
+            "attention_ops": pick["attention_ops"],
+            "spec_depth": need,
+            "solved_configs": len(solved),
+            "tried_configs": len(candidates),
+            # How the trainer should be invoked: a spec file if one exists,
+            # otherwise the built-in task name.
+            # Prefer what the run actually used; fall back to the spec file
+            # only for older rows recorded before `source` existed.
+            "source": pick.get("source") or (str(spec) if spec.exists() else ""),
+        })
+        print(f"{name:<38}{need:>5}{pick['layers']:>7}{pick['heads']:>6}{pick['terms']:>6}"
+              f"{pick['attention_ops']:>5}{f'{len(solved)}/{len(candidates)}':>8}{median:>10.0f}")
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fields = ["task", "layers", "heads", "terms", "attention_ops",
+                  "spec_depth", "solved_configs", "tried_configs", "source"]
+        temporary = out.with_suffix(out.suffix + ".partial")
+        with temporary.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(chosen)
+        temporary.replace(out)
+        print(f"\nwrote {out} ({len(chosen)} languages)")
+    return 0
+
+
 def collect(directory: Path, out: Path) -> int:
     records = []
     for path in sorted(directory.glob("*.json")):
@@ -100,9 +196,11 @@ def collect(directory: Path, out: Path) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     temporary = out.with_suffix(out.suffix + ".partial")
     with temporary.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle, fieldnames=FIELDS, extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows({**{"source": ""}, **r} for r in records)
     temporary.replace(out)
     print(f"wrote {out} ({len(records)} rows)")
 
@@ -159,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
     programs.add_argument("--max-depth", type=int, default=8)
     programs.add_argument("--report-skipped", action="store_true")
 
+    chooser = subparsers.add_parser("best", help="per-language table of the best architecture")
+    chooser.add_argument("--csv", type=Path, nargs="+", default=[Path("results/uhat_sweep.csv")])
+    chooser.add_argument("--specs", type=Path, default=Path("examples/brasp"))
+    chooser.add_argument("--out", type=Path, help="also write the picks as CSV")
+
     collector = subparsers.add_parser("collect", help="fold result JSON into a CSV")
     collector.add_argument("--dir", type=Path, default=Path("results/uhat_sweep"))
     collector.add_argument("--out", type=Path, default=Path("results/uhat_sweep.csv"))
@@ -172,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(str(error).strip("'"))
         print("\n".join(plan(args.tasks, args.layers, args.heads, args.terms)))
         return 0
+    if args.command == "best":
+        return best(args.csv, args.specs, args.out)
     if args.command == "programs":
         lines, skipped = plan_programs(
             args.dir, args.heads, args.terms, args.max_alphabet, args.max_depth

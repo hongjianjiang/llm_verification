@@ -152,11 +152,29 @@ the original specification:
 
 ```bash
 scripts/uhat_verify.py --csv results/uhat_sweep.csv
-# 13 proved equivalent, 0 provably different, 0 unsupported by the checker
+# 23 proved equivalent, 0 provably different, 0 unsupported by the checker
 ```
+
+`scripts/uhat_retrain.sh` reads `results/uhat_best.csv` (written by
+`uhat_sweep.py best --out`) and retrains every solved language at its best
+known architecture -- locally, or as a Slurm array with `SLURM=1`, on GPU
+with `GPU=1`. Prefer the GPU when the run is small enough that every array
+element starts at once: concurrency only beats a per-element speedup while
+elements queue behind each other, and at 28 elements with 40-way concurrency
+wall-clock is just the slowest element. Measured on this workload, 31:23 on
+cpu20 against 11:22 on gpu22.
 
 Two things it has to get right, both learned the hard way:
 
+* **Do not let two definitions of a language share a name.** A built-in task
+  and a `.brasp` spec of the same language have the same name but different
+  samplers and length plans, so a configuration chosen on one does not
+  transfer to the other. Fourteen languages had their architecture picked on
+  built-in data and retrained against the spec; two came back below 1.0, and
+  four others had looked like they solved *below* their spec's attention
+  depth -- an artefact of the easier sampler, not a shallower program. Every
+  run now records `source`, and `best` keeps the spec-trained rows when both
+  exist.
 * **Select on train *and* test accuracy, not test alone.** A program can score
   1.0 on the long-word test set and still miss a short word it was trained on.
   Picking such a row made the checker report a real difference -- the shortest
@@ -167,6 +185,47 @@ Two things it has to get right, both learned the hard way:
   than answering. Reporting that as "not proved" is a false inequivalence, so
   the script reports UNSUPPORTED and prefers an equally-solved program built
   only from `rightmost` ops when one exists.
+
+## The Tomita benchmark from the literature
+
+The seven Tomita grammars are the standard benchmark for regular-language
+learning, and Bhattamishra et al. (EMNLP 2020, arXiv:2009.11264) report that
+transformers generalise on four of them and fail on three -- exactly the three
+that are not star-free. `uhat.tasks.TOMITA` has all seven, over `{0,1}`:
+
+| | language | star-free |
+| --- | --- | --- |
+| 1 | `1*` | yes |
+| 2 | `(10)*` | yes |
+| 3 | every odd run of 1s is followed by an even run of 0s | **no** |
+| 4 | no factor `000` | yes |
+| 5 | even number of 0s and even number of 1s | **no** |
+| 6 | `(#1 - #0) mod 3 == 0` | **no** |
+| 7 | `0*1*0*1*` | yes |
+
+The sweep reproduces the split, and adds what an accuracy benchmark cannot:
+the four successes are *proved* equal to hand-written specifications, not
+merely measured on held-out words.
+
+| | best architecture | robustness | verdict |
+| --- | --- | --- | --- |
+| tomita_1 | l1 h1 t1 | 12/12 | PROVED |
+| tomita_2 | l2 h1 t2 | 7/12 | PROVED |
+| tomita_4 | l3 h1 t1 | 11/12 | PROVED |
+| tomita_7 | l3 h1 t2 | 10/12 | PROVED |
+| tomita_3 | -- | 0/12 | unsolved, best test 0.6490 |
+| tomita_5 | -- | 0/12 | unsolved, best test 0.5025 |
+| tomita_6 | -- | 0/12 | unsolved, best test 0.5030 |
+
+The specs in `examples/brasp/tomita_{1,2,4,7}.brasp` are checked against their
+Python predicates over every word to length 14 -- 32766 each -- by
+`tests/test_uhat.py`, because a wrong spec would silently turn every proof
+about them into a proof about a different language.
+
+Most of these languages need a sampler of their own. A uniform length-30 word
+is in `1*` with probability 2^-30, so `mutation_sampler` builds a positive and
+perturbs half of them into near-misses, which is also what puts negatives next
+to the decision boundary rather than far from it.
 
 ## Negative controls
 

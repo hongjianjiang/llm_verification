@@ -1,6 +1,8 @@
+import itertools
 import os
 import random
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -146,6 +148,102 @@ class TaskTests(unittest.TestCase):
         self.assertTrue(TASKS["parity_a"].label(list("aabb")))
         self.assertFalse(TASKS["parity_a"].label(list("abb")))
         self.assertFalse(TASKS["parity_a"].star_free)
+
+
+class TomitaSpecTests(unittest.TestCase):
+    """The hand-written specs must be the Tomita languages, not near-misses.
+
+    These specs are what a learned program is proved equivalent to, so an
+    error here would silently turn every proof about them into a proof about
+    the wrong language.
+    """
+
+    def test_specs_match_their_predicates_exhaustively(self):
+        from uhat.tasks import TOMITA
+
+        for number in (1, 2, 4, 7):
+            with self.subTest(tomita=number):
+                program = brasp.parse(
+                    Path(f"examples/brasp/tomita_{number}.brasp").read_text()
+                )
+                task = TOMITA[f"tomita_{number}"]
+                for length in range(1, 12):
+                    for word in itertools.product(("0", "1"), repeat=length):
+                        self.assertEqual(
+                            brasp.accepts(program, list(word)),
+                            task.label(list(word)),
+                            f"tomita_{number} disagrees on {''.join(word)!r}",
+                        )
+
+    def test_star_free_classification(self):
+        from uhat.tasks import TOMITA
+
+        star_free = {n for n in range(1, 8) if TOMITA[f"tomita_{n}"].star_free}
+        # Bhattamishra et al. (EMNLP 2020) report transformers failing on
+        # exactly the non-star-free three.
+        self.assertEqual(star_free, {1, 2, 4, 7})
+
+
+class RealUhatExtractionTests(unittest.TestCase):
+    """The real-valued model's program must match it exactly, at any weights.
+
+    This is the harder direction than `uhat.extract`: there the model was
+    already Boolean, here real activations have to be shown to range over
+    finitely many classes and a real argmax has to become a Boolean cascade.
+    Checking it at random weights is what makes it a claim about the
+    construction rather than about wherever training happened to land.
+    """
+
+    def test_random_real_models_match_their_extraction(self):
+        import torch
+
+        from uhat.real_extract import build_program, class_tables
+        from uhat.real_model import RealUhat, RealUhatConfig, accepts
+
+        cases = [
+            (6, 1, 1, ("a", "b"), ("rightmost",)),
+            (6, 1, 2, ("a", "b"), ("rightmost", "leftmost")),
+            (8, 2, 1, ("a", "b"), ("leftmost",)),
+            (5, 1, 1, ("a", "b", "c"), ("rightmost",)),
+        ]
+        for seed, (width, layers, heads, alphabet, directions) in enumerate(cases):
+            with self.subTest(width=width, layers=layers, heads=heads, sigma=len(alphabet)):
+                torch.manual_seed(seed)
+                model = RealUhat(RealUhatConfig(
+                    alphabet, width=width, layers=layers, heads=heads, directions=directions
+                ))
+                tables = class_tables(model)
+                program = build_program(model)
+                longest = 7 if len(alphabet) == 2 else 5
+                words = [
+                    tuple(w)
+                    for n in range(1, longest + 1)
+                    for w in itertools.product(alphabet, repeat=n)
+                ]
+                from_model = accepts(model, words, snap_to=[t.values for t in tables])
+                from_program = [brasp.accepts(program, w) for w in words]
+                self.assertEqual(from_model, from_program)
+
+    def test_score_gate_makes_exact_ties_reachable(self):
+        """At `relu(gate) == 0` every score ties, so `C` alone selects.
+
+        Without this the head cannot express "the previous position": scores
+        depend only on the classes of i and j, so equal symbols score equally
+        and only the tie-break separates them.
+        """
+        import torch
+
+        from uhat.real_model import RealUhat, RealUhatConfig, encode
+
+        torch.manual_seed(0)
+        model = RealUhat(RealUhatConfig(("a", "b"), width=6, layers=1, heads=1))
+        head = model.blocks[0].heads[0]
+        with torch.no_grad():
+            head.gate.fill_(-1.0)  # relu -> 0
+        tokens, _ = encode([("a", "a", "a", "b")], ("a", "b"))
+        scores = head.scores(model.embedding(tokens))[0]
+        self.assertTrue(torch.allclose(scores[3, :3], torch.zeros(3)))
+        self.assertEqual(int(head.chosen(scores)[3].item()), 2)  # rightmost = i-1
 
 
 @unittest.skipUnless(os.environ.get("UHAT_SLOW_TESTS"), "set UHAT_SLOW_TESTS=1")

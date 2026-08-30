@@ -1,0 +1,21 @@
+{
+  "task": "contains_aba",
+  "source": "examples/brasp/contains_aba.brasp",
+  "star_free": true,
+  "layers": 4,
+  "heads": 3,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 0.732725,
+  "train_accuracy": 0.732725,
+  "test_accuracy": 0.601,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 6,
+  "seconds": 456.3,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nh1_1 = rightmost(!is_bos@j & is_a@j & !is_b@j, !is_bos@j)\nh1_2 = leftmost(!is_b@i & !is_bos@j & is_a@j & !is_b@j, true)\nh1_3 = rightmost(!is_bos@j & is_a@j & !is_b@j, !is_bos@j)\nh2_2 = leftmost(!is_a@i & !h1_1@i & !h1_2@i & !h1_3@i & !is_a@j & !is_b@j & !h1_1@j & !h1_2@j & !h1_3@j, is_bos@j & !is_a@j & !is_b@j & !h1_1@j & !h1_2@j & !h1_3@j)\nh2_3 = rightmost(!h1_2@i & !h1_3@i & !is_a@j, !is_a@j)\nh4_3 = rightmost(!is_a@j & !h2_2@j, is_bos@j)\naccept = h1_1 & h1_3 & !h2_2 & !h2_3 & !h4_3\n\noutput accept\n"
+}

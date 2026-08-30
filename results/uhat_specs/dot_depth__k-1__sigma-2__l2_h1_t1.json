@@ -1,0 +1,21 @@
+{
+  "task": "dot_depth__k-1__sigma-2",
+  "source": "examples/brasp/dot_depth__k-1__sigma-2.brasp",
+  "star_free": true,
+  "layers": 2,
+  "heads": 1,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 0.964798,
+  "train_accuracy": 0.964798,
+  "test_accuracy": 1.0,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 1,
+  "seconds": 123.3,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nh2_1 = rightmost(!is_bos@j & is_a@j & !is_b@j, true)\naccept = !is_bos & h2_1\n\noutput accept\n"
+}

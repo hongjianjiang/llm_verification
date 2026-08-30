@@ -53,6 +53,103 @@ def equal_blocks_sampler(alphabet, count, min_length, max_length, rng):
     return words
 
 
+def _runs(word: Sequence[str]) -> list[tuple[str, int]]:
+    runs: list[tuple[str, int]] = []
+    for symbol in word:
+        if runs and runs[-1][0] == symbol:
+            runs[-1] = (symbol, runs[-1][1] + 1)
+        else:
+            runs.append((symbol, 1))
+    return runs
+
+
+def mutation_sampler(make_positive, rate: float = 0.5):
+    """Constructed positives, half of them perturbed into near-misses.
+
+    Uniform sampling is useless for most of the Tomita languages -- a random
+    length-30 word is in `1*` with probability 2^-30 -- and sampling only
+    positives is worse, because the model never sees the boundary. Building a
+    positive and then flipping, inserting, or deleting one symbol puts the
+    negatives right next to it, which is what makes the boundary learnable.
+    """
+
+    def sample(alphabet, count, min_length, max_length, rng):
+        words = []
+        for _ in range(count):
+            length = rng.randint(min_length, max_length)
+            word = list(make_positive(alphabet, length, rng))
+            if rng.random() >= rate and word:
+                operation = rng.choice(("flip", "insert", "delete"))
+                index = rng.randrange(len(word))
+                if operation == "flip":
+                    others = [s for s in alphabet if s != word[index]]
+                    word[index] = rng.choice(others or list(alphabet))
+                elif operation == "insert":
+                    word.insert(index, rng.choice(list(alphabet)))
+                elif len(word) > 1:
+                    del word[index]
+            words.append(tuple(word))
+        return words
+
+    return sample
+
+
+def _alternating(alphabet, length, rng):
+    first, second = alphabet[1], alphabet[0]  # (10)* over {0,1}
+    return [first if i % 2 == 0 else second for i in range(2 * max(1, length // 2))]
+
+
+def _no_three_zeros(alphabet, length, rng):
+    zero, one = alphabet[0], alphabet[1]
+    word: list[str] = []
+    while len(word) < length:
+        word.extend([zero] * rng.randint(0, 2))
+        word.append(one)
+    return word[:length]
+
+
+def _four_blocks(alphabet, length, rng):
+    zero, one = alphabet[0], alphabet[1]
+    cuts = sorted(rng.randint(0, length) for _ in range(3))
+    sizes = [b - a for a, b in zip([0] + cuts, cuts + [length])]
+    word: list[str] = []
+    for symbol, size in zip((zero, one, zero, one), sizes):
+        word.extend([symbol] * size)
+    return word
+
+
+def _tomita_3(word: Sequence[str]) -> bool:
+    """Every odd-length run of 1s is followed by an even-length run of 0s."""
+    runs = _runs(word)
+    for index, (symbol, size) in enumerate(runs):
+        if symbol == "1" and size % 2 == 1 and index + 1 < len(runs):
+            following = runs[index + 1]
+            if following[0] == "0" and following[1] % 2 == 1:
+                return False
+    return True
+
+
+TOMITA: dict[str, Task] = {}
+for _k, (_predicate, _star_free, _positive) in {
+    1: (lambda w: set(w) <= {"1"}, True, lambda a, n, r: [a[1]] * n),
+    2: (lambda w: "".join(w) in {"10" * k for k in range(1, 64)}, True, _alternating),
+    3: (_tomita_3, False, None),
+    4: (lambda w: "000" not in "".join(w), True, _no_three_zeros),
+    5: (lambda w: list(w).count("0") % 2 == 0 and list(w).count("1") % 2 == 0, False, None),
+    6: (lambda w: (list(w).count("1") - list(w).count("0")) % 3 == 0, False, None),
+    7: (lambda w: "".join(w).count("10") <= 1, True, _four_blocks),
+}.items():
+    TOMITA[f"tomita_{_k}"] = Task(
+        name=f"tomita_{_k}",
+        alphabet=("0", "1"),
+        predicate=_predicate,
+        star_free=_star_free,
+        # 3, 5 and 6 are modular-counting languages; uniform words already
+        # split them close to evenly, so they need no constructed positives.
+        sampler=mutation_sampler(_positive) if _positive else None,
+        lengths=(8, (1, 16), (17, 40)),
+    )
+
 TASKS: dict[str, Task] = {
     "ends_ab": Task("ends_ab", ("a", "b"), lambda w: "".join(w).endswith("ab")),
     "contains_ab": Task("contains_ab", ("a", "b"), lambda w: _factor(w, "ab")),
@@ -194,6 +291,8 @@ def resolve(name: str) -> Task:
     """Look up a static task, or build a parameterised one from its name."""
     if name in TASKS:
         return TASKS[name]
+    if name in TOMITA:
+        return TOMITA[name]
     match = _DOT_DEPTH.match(name)
     if match:
         k, sigma = int(match.group(1)), int(match.group(2))

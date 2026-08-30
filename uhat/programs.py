@@ -62,17 +62,39 @@ def mixed_sampler(max_blocks: int = 12):
 
 
 def program_task(path: str | Path, name: str | None = None) -> Task:
-    """A `Task` whose labels come from evaluating the `.brasp` program."""
+    """A `Task` whose labels come from evaluating the `.brasp` program.
+
+    When a built-in task of the same name exists, its sampler and length plan
+    are reused. They describe the same language, and the built-in one may
+    carry a sampler the language actually needs: `(10)*` has no positives at
+    all under generic sampling, so training the spec with the default would
+    silently produce an all-negative split.
+    """
     program = brasp.parse(Path(path).read_text())
     alphabet = program.alphabet
+    stem = name or Path(path).stem
+
+    from .tasks import resolve  # local: tasks imports nothing from here
+
+    try:
+        built_in = resolve(stem)
+    except KeyError:
+        built_in = None
+    if built_in is not None and tuple(built_in.alphabet) != tuple(alphabet):
+        built_in = None  # same name, different language; do not borrow
+
     enumerate_upto = 7 if len(alphabet) <= 2 else (5 if len(alphabet) <= 4 else 3)
     return Task(
-        name=name or Path(path).stem,
+        name=stem,
         alphabet=alphabet,
         predicate=lambda word, program=program: brasp.accepts(program, list(word)),
         star_free=True,  # everything B-RASP expresses is star-free by definition
-        sampler=mixed_sampler(),
-        lengths=(enumerate_upto, (1, 16), (17, 40)),
+        sampler=built_in.sampler if built_in is not None else mixed_sampler(),
+        lengths=(
+            built_in.lengths
+            if built_in is not None and built_in.lengths is not None
+            else (enumerate_upto, (1, 16), (17, 40))
+        ),
     )
 
 

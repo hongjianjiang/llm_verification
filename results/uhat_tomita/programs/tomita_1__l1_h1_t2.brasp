@@ -1,0 +1,9 @@
+alphabet 0 1
+
+is_bos = bos
+is_sym0 = symbol 0
+is_sym1 = symbol 1
+h1_1 = rightmost(!is_bos@j & is_sym0@j & !is_sym1@j, is_sym0@j & !is_sym1@j | !is_bos@j & is_sym0@j & !is_sym1@j)
+accept = !is_sym0 & is_sym1 & !h1_1 | !is_sym0 & !h1_1
+
+output accept

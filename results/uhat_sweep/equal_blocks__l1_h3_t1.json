@@ -1,0 +1,20 @@
+{
+  "task": "equal_blocks",
+  "star_free": false,
+  "layers": 1,
+  "heads": 3,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 1,
+  "model_hard_accuracy": 0.745846,
+  "train_accuracy": 0.745846,
+  "test_accuracy": 0.5,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 2,
+  "seconds": 1063.8,
+  "program": "alphabet a b\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nh1_2 = leftmost(is_a@i & !is_b@i & !is_bos@j & !is_a@j, is_a@i & !is_b@i)\nh1_3 = rightmost(is_bos@i & !is_a@i & is_b@i & !is_bos@j & is_a@j & !is_b@j, !is_bos@j)\naccept = !is_a & is_b & !h1_2 & h1_3\n\noutput accept\n"
+}

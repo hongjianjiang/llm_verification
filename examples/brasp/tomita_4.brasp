@@ -1,0 +1,11 @@
+# Tomita 4: no factor 000.
+alphabet 0 1
+
+is_0 = symbol 0
+prev_0 = rightmost(true, is_0@j)
+prev_prev_0 = rightmost(true, prev_0@j)
+three_zeros = is_0 & prev_0 & prev_prev_0
+seen_three = rightmost(three_zeros@j, true)
+accept = !three_zeros & !seen_three
+
+output accept
