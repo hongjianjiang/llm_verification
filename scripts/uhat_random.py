@@ -23,8 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from uhat import brasp  # noqa: E402
 from uhat.random_programs import (  # noqa: E402
+    canonical_dfa,
     describe_language,
     random_program,
+    sample_diverse,
     sample_languages,
 )
 
@@ -37,13 +39,45 @@ def main(argv=None) -> int:
     parser.add_argument("--manifest", type=Path, default=Path("results/uhat_random.csv"))
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--max-depth", type=int, default=4)
+    parser.add_argument(
+        "--min-states",
+        type=int,
+        default=4,
+        help="minimum minimal-DFA states; 0 restores the old program-only "
+        "filter, which produced 48 programs computing 34 languages, most of "
+        "them decided by the final symbol",
+    )
     args = parser.parse_args(argv)
 
     rng = random.Random(args.seed)
-    kept, tally = sample_languages(args.count, rng, max_depth=args.max_depth)
-    print(f"drew {tally['drawn']} programs: {tally['empty']} empty, "
-          f"{tally['universal']} universal, {tally['too_deep']} out of depth range, "
-          f"{tally['kept']} kept")
+    if args.min_states > 0:
+        # Exclude anything the readable catalogue already names, so what
+        # survives is the tail that a person would not have written down.
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_ident", Path(__file__).resolve().parent / "uhat_identify.py"
+        )
+        identify = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(identify)
+        known = []
+        for alphabet in (("a", "b"), ("a", "b", "c")):
+            for program in identify.catalogue(alphabet).values():
+                signature, _ = canonical_dfa(program)
+                known.append(signature)
+        kept, tally = sample_diverse(
+            args.count, rng, min_states=args.min_states,
+            max_depth=args.max_depth, known=known,
+        )
+        print(f"drew {tally['drawn']}: {tally['degenerate']} degenerate, "
+              f"{tally['too_shallow']} out of depth range, "
+              f"{tally['too_simple']} under {args.min_states} DFA states, "
+              f"{tally['duplicate']} duplicates, {tally['kept']} kept")
+    else:
+        kept, tally = sample_languages(args.count, rng, max_depth=args.max_depth)
+        print(f"drew {tally['drawn']} programs: {tally['empty']} empty, "
+              f"{tally['universal']} universal, {tally['too_deep']} out of depth range, "
+              f"{tally['kept']} kept")
 
     empties = []
     while len(empties) < args.empty:
@@ -62,7 +96,7 @@ def main(argv=None) -> int:
         (args.out / f"{name}.brasp").write_text(brasp.render(program))
         rows.append({"name": name, "path": str(args.out / f"{name}.brasp"),
                      "expected_empty": facts["long_rate"] == 0.0 and facts["short_rate"] == 0.0,
-                     **facts})
+                     "dfa_states": facts.get("dfa_states", ""), **facts})
     with args.manifest.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()

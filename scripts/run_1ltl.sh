@@ -51,7 +51,7 @@ for f in "${files[@]}"; do
   walls=""; verdict=""; compile=""; explore=""; total=""; disjuncts=""
   for _ in $(seq "$REPS"); do
     start=$(date +%s.%N)
-    out=$("$TIMEOUT_BIN" "$TIMEOUT" java -jar "$JAR" "$f" \
+    out=$("$TIMEOUT_BIN" -k 10 "$TIMEOUT" java -jar "$JAR" "$f" \
             --one-variable --run-native --native-max-states "$MAX_STATES" --timing 2>&1)
     code=$?
     wall=$(awk -v a="$(date +%s.%N)" -v b="$start" 'BEGIN{printf "%.1f", a-b}')

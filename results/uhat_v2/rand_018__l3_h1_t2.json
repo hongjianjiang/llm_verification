@@ -1,0 +1,21 @@
+{
+  "task": "rand_018",
+  "source": "examples/brasp/random_v2/rand_018.brasp",
+  "star_free": true,
+  "layers": 3,
+  "heads": 1,
+  "terms": 2,
+  "steps": 1500,
+  "restarts": 3,
+  "seed": 0,
+  "best_seed": 0,
+  "model_hard_accuracy": 1.0,
+  "train_accuracy": 1.0,
+  "test_accuracy": 1.0,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 3,
+  "seconds": 67.7,
+  "program": "alphabet a b c\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nis_c = symbol c\nh1_1 = rightmost(is_a@i & !is_b@i & !is_c@i, is_a@i & !is_b@i & !is_c@i & !is_b@j | !is_b@i & !is_c@i & !is_bos@j & is_a@j & !is_b@j)\nh2_1 = rightmost(!is_a@i & is_b@i & !h1_1@i & !is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j | !is_a@i & !h1_1@i & !is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j, !h1_1@i & !is_bos@j | !h1_1@i & !is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j)\nh3_1 = rightmost(!h1_1@i & !is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j & h2_1@j, is_bos@i & is_b@i & !h1_1@i & h2_1@i & is_bos@j & !is_c@j & h1_1@j & h2_1@j | !h1_1@i & !is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j & h2_1@j)\naccept = !is_c & h1_1 & !h2_1 & !h3_1 | is_a & !is_b & !is_c & !h2_1 & !h3_1\n\noutput accept\n"
+}

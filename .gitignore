@@ -9,7 +9,10 @@ project/project/
 .bloop/
 .bsp/
 .metals/
+.claude/
+.pytest_cache/
 .ammonite/
+graphs/
 metals.sbt
 ltl_examples/
 benchmarks/

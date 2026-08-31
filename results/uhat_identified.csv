@@ -1,0 +1,49 @@
+language,alphabet,identified_as,proof,proved_supersets
+rand_000,3,,,not_last_a contains_a a_before_c
+rand_001,3,ends_ac,PROVED,
+rand_002,3,last_b,PROVED,
+rand_003,3,,,not_last_a contains_a a_before_c
+rand_004,3,last_c,PROVED,
+rand_005,3,,,contains_c
+rand_006,3,ends_cb,PROVED,
+rand_007,3,,,not_last_a contains_a a_before_c
+rand_008,2,first_is_b,PROVED,
+rand_009,2,last_a,PROVED,
+rand_010,3,,,not_last_a
+rand_011,3,,,contains_b
+rand_012,3,not_last_a,PROVED,
+rand_013,2,last_a,PROVED,
+rand_014,3,not_last_b,PROVED,
+rand_015,3,,,not_last_a not_last_b last_c
+rand_016,2,,,last_a contains_a a_before_a
+rand_017,2,,,last_a contains_a a_before_a
+rand_018,3,,,
+rand_019,2,last_a,PROVED,
+rand_020,2,,,not_last_a last_b contains_b
+rand_021,3,,,not_last_b
+rand_022,3,,,not_last_a last_b contains_b
+rand_023,2,,,not_last_a last_b contains_b
+rand_024,3,ends_cb,PROVED,
+rand_025,2,not_last_a,PROVED,
+rand_026,2,,,last_a contains_a a_before_a
+rand_027,2,,,not_last_a last_b contains_b
+rand_028,3,,,contains_b prev_is_b not_last_c
+rand_029,3,,,contains_b
+rand_030,3,last_a,PROVED,
+rand_031,3,last_a,PROVED,
+rand_032,3,,,
+rand_033,2,,,not_last_a last_b contains_b
+rand_034,2,,,not_last_a last_b contains_b
+rand_035,3,,,last_a contains_a a_before_a
+rand_036,2,ends_bb,PROVED,
+rand_037,3,,,not_last_b
+rand_038,3,,,not_last_a not_last_b last_c
+rand_039,2,,,not_last_a last_b contains_b
+rand_040,2,empty,PROVED,
+rand_041,3,empty,PROVED,
+rand_042,2,empty,PROVED,
+rand_043,2,empty,PROVED,
+rand_044,2,empty,PROVED,
+rand_045,3,empty,PROVED,
+rand_046,3,empty,PROVED,
+rand_047,3,empty,PROVED,

@@ -27,8 +27,17 @@ def _random_dnf(
     predicate: bool,
     terms: int = 2,
     literals: int = 2,
+    require_witness: bool = False,
 ) -> brasp.Expr:
-    """A small DNF over `names`, with `@i`/`@j` sides when `predicate`."""
+    """A small DNF over `names`, with `@i`/`@j` sides when `predicate`.
+
+    `require_witness` forces every clause to read at least one feature at `j`.
+    Without it a head's value can depend only on the query position, so the
+    head reports nothing about where it attended and the language collapses to
+    a local letter predicate -- which is how an earlier version of this
+    generator produced 48 programs computing 34 languages, most of them
+    "look at the last symbol".
+    """
     clauses = []
     for _ in range(rng.randint(1, terms)):
         chosen = []
@@ -37,6 +46,13 @@ def _random_dnf(
             at = rng.choice(("i", "j")) if predicate else "i"
             reference = brasp.Ref(name, at)
             chosen.append(brasp.Not(reference) if rng.random() < 0.4 else reference)
+        if require_witness and not any(
+            isinstance(x, brasp.Ref) and x.at == "j"
+            or isinstance(x, brasp.Not) and getattr(x.arg, "at", "i") == "j"
+            for x in chosen
+        ):
+            witness = brasp.Ref(rng.choice(names), "j")
+            chosen.append(brasp.Not(witness) if rng.random() < 0.35 else witness)
         clauses.append(brasp.conjunction(chosen))
     return brasp.disjunction(clauses)
 
@@ -67,7 +83,7 @@ def random_program(
         if kind == "attention":
             direction = rng.choice(("rightmost", "leftmost"))
             score = _random_dnf(names, rng, predicate=True)
-            value = _random_dnf(names, rng, predicate=True)
+            value = _random_dnf(names, rng, predicate=True, require_witness=True)
             subprograms.append(brasp.Attention(name, direction, score, value))
             last_attention = name
         else:
@@ -161,6 +177,96 @@ def sample_languages(
             continue
         if not (low <= facts["long_rate"] <= high):
             continue
+        kept.append((program, facts))
+        tally["kept"] += 1
+    return kept, tally
+
+
+# --- diversity filtering, on the language rather than the program ------------
+
+
+def canonical_dfa(program: brasp.Program, suffix_length: int = 5):
+    """A canonical form of the language: BFS-relabelled minimal DFA.
+
+    Two programs are the same language exactly when these agree, so this is
+    both the diversity measure and the deduplication key. Filtering on the
+    *program* cannot do this job -- an elaborate depth-4 program and a
+    one-line one can compute the same two-state language.
+    """
+    import importlib.util
+    from pathlib import Path as _Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_uhat_dfa", _Path(__file__).resolve().parent.parent / "scripts" / "uhat_dfa.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    dfa = module.dfa_from_program(program, suffix_length)
+    if dfa is None:
+        return None, None
+
+    order = {dfa.initial: 0}
+    queue = [dfa.initial]
+    while queue:
+        state = queue.pop(0)
+        for symbol in range(len(dfa.alphabet)):
+            target = dfa.transitions[state][symbol]
+            if target not in order:
+                order[target] = len(order)
+                queue.append(target)
+    states = sorted(order, key=order.get)
+    signature = (
+        tuple(dfa.alphabet),
+        tuple(tuple(order[dfa.transitions[s][a]] for a in range(len(dfa.alphabet)))
+              for s in states),
+        tuple(sorted(order[s] for s in dfa.accepting if s in order)),
+    )
+    return signature, dfa
+
+
+def sample_diverse(
+    count: int,
+    rng: random.Random,
+    min_states: int = 4,
+    band: tuple[float, float] = (0.08, 0.92),
+    max_depth: int = 4,
+    alphabets: Sequence[tuple[str, ...]] = (("a", "b"), ("a", "b", "c")),
+    known: Sequence = (),
+    attempts: int = 6000,
+):
+    """Draw `count` languages that are pairwise distinct and non-trivial.
+
+    Three filters, in increasing cost: the acceptance-rate band rejects empty
+    and universal draws cheaply; the minimal DFA must have at least
+    `min_states` states, which is what rules out "look at the last symbol";
+    and the canonical DFA must be new, both against the languages already kept
+    and against `known` (the readable catalogue).
+    """
+    seen = {k for k in known if k is not None}
+    kept, tally = [], {"drawn": 0, "degenerate": 0, "too_shallow": 0,
+                       "too_simple": 0, "duplicate": 0, "kept": 0}
+
+    while len(kept) < count and tally["drawn"] < attempts:
+        tally["drawn"] += 1
+        program = random_program(
+            rng, rng.choice(list(alphabets)), rng.randint(2, 4), rng.randint(0, 2)
+        )
+        facts = describe_language(program, rng)
+        if facts["depth"] < 1 or facts["depth"] > max_depth:
+            tally["too_shallow"] += 1
+            continue
+        if not (band[0] <= facts["long_rate"] <= band[1]):
+            tally["degenerate"] += 1
+            continue
+        signature, dfa = canonical_dfa(program)
+        if dfa is None or dfa.states < min_states:
+            tally["too_simple"] += 1
+            continue
+        if signature in seen:
+            tally["duplicate"] += 1
+            continue
+        seen.add(signature)
+        facts["dfa_states"] = dfa.states
         kept.append((program, facts))
         tally["kept"] += 1
     return kept, tally

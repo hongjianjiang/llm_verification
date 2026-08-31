@@ -48,7 +48,7 @@ for f in "${files[@]}"; do
   walls=""; verdict=""; compile=""; encode=""; abc=""; total=""
   for _ in $(seq "$REPS"); do
     start=$(date +%s.%N)
-    out=$("$TIMEOUT_BIN" "$TIMEOUT" java -jar "$JAR" "$f" --run-abc --abc-bin "$ABC_BIN" --timing 2>&1)
+    out=$("$TIMEOUT_BIN" -k 10 "$TIMEOUT" java -jar "$JAR" "$f" --run-abc --abc-bin "$ABC_BIN" --timing 2>&1)
     code=$?
     wall=$(awk -v a="$(date +%s.%N)" -v b="$start" 'BEGIN{printf "%.1f", a-b}')
     walls="$walls $wall"
