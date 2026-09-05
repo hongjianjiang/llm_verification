@@ -13,6 +13,16 @@ what a collapsed model produces: a program that rejects everything scores well
 on a skewed test set and is worthless, and emptiness is the cheapest way to
 catch that without looking at a specification.
 
+Rows are gated before they may contribute to the agreement rate, because an
+ungated rate is not evidence.  A language whose *specification* is empty has
+no positive words at all, so every training label is false, "reject
+everything" scores 1.0 on train and test, and the checker duly confirms
+empty == empty -- a row an untrained model would also produce.  A language
+the model did not actually learn can likewise agree on non-emptiness while
+being a different language.  Both are recorded, with a `status`, and both are
+kept out of the headline number.  `--ungated` restores the old behaviour of
+counting every row.
+
     scripts/uhat_emptiness.py --csv results/uhat_all_best.csv \
         --learned results/uhat_experiment/programs --json-dir results/uhat_experiment
 """
@@ -30,6 +40,20 @@ from pathlib import Path
 
 def stem_of(row: dict) -> str:
     return f"{row['task']}__l{row['layers']}_h{row['heads']}_t{row['terms']}"
+
+
+def classify(trained: dict) -> str:
+    """`ok`, `degenerate`, or `unsolved` -- may this row carry evidence?
+
+    The same two criteria `uhat_sweep.py best` applies, checked here as well
+    because this script is routinely pointed at an unfiltered CSV.
+    """
+    rate = trained.get("test_positive_rate")
+    if rate is not None and not 0.05 <= float(rate) <= 0.95:
+        return "degenerate"
+    if float(trained["train_accuracy"]) < 1.0 or float(trained["test_accuracy"]) < 1.0:
+        return "unsolved"
+    return "ok"
 
 
 def emptiness(jar: str, path: Path, timeout: int) -> tuple[bool | None, str, float]:
@@ -58,6 +82,12 @@ def main() -> int:
     parser.add_argument("--json-dir", type=Path, default=Path("results/uhat_experiment"))
     parser.add_argument("--jar", default="target/scala-3.5.1/brasp-verification.jar")
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument(
+        "--ungated",
+        action="store_true",
+        help="let degenerate and unsolved rows count toward the agreement "
+        "rate, as this script did before the gate existed",
+    )
     parser.add_argument("--out", type=Path, default=Path("results/uhat_experiment.csv"))
     parser.add_argument(
         "--specs",
@@ -71,11 +101,13 @@ def main() -> int:
     fields = [
         "task", "layers", "heads", "terms", "attention_ops",
         "train_seconds", "train_accuracy", "test_accuracy",
+        "test_positive_rate", "status",
         "empty", "verdict", "verify_seconds", "spec_empty", "agrees",
     ]
     records = []
-    print(f"{'language':<38}{'train s':>9}{'train':>8}{'test':>8}{'empty':>8}{'verify s':>10}")
-    print("-" * 81)
+    print(f"{'language':<38}{'train s':>9}{'train':>8}{'test':>8}{'empty':>11}"
+          f"{'verify s':>10}  {'status'}")
+    print("-" * 92)
 
     for row in csv.DictReader(args.csv.open()):
         stem = stem_of(row)
@@ -85,6 +117,7 @@ def main() -> int:
             print(f"{row['task']:<38}  MISSING {learned.name}")
             continue
         trained = json.loads(measurements.read_text())
+        status = classify(trained)
 
         empty, verdict, elapsed = emptiness(args.jar, learned, args.timeout)
 
@@ -95,7 +128,10 @@ def main() -> int:
             if spec.exists():
                 spec_empty, _, spec_seconds = emptiness(args.jar, spec, args.timeout)
                 elapsed += spec_seconds
-                agrees = "" if spec_empty is None or empty is None else str(spec_empty == empty).lower()
+                # A gated row still gets its verdicts recorded; what it does
+                # not get is a vote, so leave `agrees` empty unless it counts.
+                if (status == "ok" or args.ungated) and None not in (spec_empty, empty):
+                    agrees = str(spec_empty == empty).lower()
 
         records.append({
             "task": row["task"], "layers": row["layers"], "heads": row["heads"],
@@ -103,6 +139,8 @@ def main() -> int:
             "train_seconds": round(trained["seconds"], 1),
             "train_accuracy": trained["train_accuracy"],
             "test_accuracy": trained["test_accuracy"],
+            "test_positive_rate": trained.get("test_positive_rate", ""),
+            "status": status,
             "empty": "" if empty is None else str(empty).lower(),
             "verdict": verdict, "verify_seconds": round(elapsed, 2),
             "spec_empty": "" if spec_empty is None else str(spec_empty).lower(),
@@ -110,7 +148,7 @@ def main() -> int:
         })
         print(f"{row['task']:<38}{trained['seconds']:>9.0f}"
               f"{trained['train_accuracy']:>8.4f}{trained['test_accuracy']:>8.4f}"
-              f"{verdict:>8}{elapsed:>10.2f}", flush=True)
+              f"{verdict:>11}{elapsed:>10.2f}  {status}", flush=True)
 
     if records:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -121,10 +159,36 @@ def main() -> int:
         empty_count = sum(1 for r in records if r["empty"] == "true")
         print(f"\n{len(records)} languages; {empty_count} empty, "
               f"{len(records) - empty_count} non-empty")
+
+        degenerate = [r for r in records if r["status"] == "degenerate"]
+        unsolved = [r for r in records if r["status"] == "unsolved"]
+        for label, bucket, why in (
+            ("degenerate", degenerate, "test set is all one class, so "
+             "'reject everything' already scores 1.0"),
+            ("unsolved", unsolved, "program is provably not the specification, "
+             "so agreement on emptiness says nothing"),
+        ):
+            if bucket:
+                print(f"\n{len(bucket)} {label} (excluded from the rate -- {why}):")
+                for r in bucket:
+                    print(f"  {r['task']:<24} train {float(r['train_accuracy']):.4f}"
+                          f"  test {float(r['test_accuracy']):.4f}"
+                          f"  positives {r['test_positive_rate']}"
+                          f"  spec {r['spec_empty'] or '?'}")
+
         compared = [r for r in records if r["agrees"]]
         if compared:
-            matched = sum(1 for r in compared if r["agrees"] == "true")
-            print(f"emptiness matches the specification on {matched}/{len(compared)}")
+            # An empty specification makes agreement automatic rather than
+            # earned; count those separately instead of inside the rate.
+            trivial = [r for r in compared if r["spec_empty"] == "true"]
+            earned = [r for r in compared if r["spec_empty"] != "true"]
+            matched = sum(1 for r in earned if r["agrees"] == "true")
+            print(f"\nemptiness matches the specification on {matched}/{len(earned)}"
+                  f" non-trivial languages")
+            if trivial:
+                print(f"  plus {len(trivial)} with an empty specification, where "
+                      f"agreement is automatic: "
+                      f"{', '.join(r['task'] for r in trivial)}")
             for r in compared:
                 if r["agrees"] != "true":
                     print(f"  MISMATCH {r['task']}: spec {r['spec_empty']}, learned {r['empty']}")

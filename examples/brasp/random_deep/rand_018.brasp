@@ -1,0 +1,18 @@
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+n0 = is_bos | !is_c
+n1 = rightmost(!is_a@j & !n0@i | n0@i, is_a@j | is_c@i & !n0@j)
+n2 = leftmost(is_b@j, is_a@i & !is_bos@j | is_c@i & !is_bos@j)
+n3 = leftmost(n1@j & is_c@i, !is_a@i & !is_c@i & !n1@j)
+n4 = leftmost(n3@i | !n0@i & !is_bos@i, is_a@i & !is_c@i & n3@j | !n2@i & !n0@j)
+n5 = rightmost(is_a@i | is_b@j, !n4@j)
+n6 = n1
+n7 = leftmost(n3@i & !is_a@j, !n1@j)
+n8 = rightmost(!n4@i | is_c@i & is_b@i, n5@i & !is_b@i & is_a@j)
+accept = n8 & !is_a
+
+output accept

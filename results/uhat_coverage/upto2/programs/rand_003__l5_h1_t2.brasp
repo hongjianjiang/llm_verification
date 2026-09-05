@@ -1,0 +1,13 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+h1_1 = rightmost(!is_bos@j & is_a@j | !is_bos@j, is_a@j & !is_b@j | !is_bos@j & is_a@j & !is_b@j)
+h2_1 = rightmost(!is_bos@j & is_a@j & !is_b@j | !is_b@i & !is_bos@j & !h1_1@j, !is_bos@j & h1_1@j | !is_bos@j & is_a@j)
+h3_1 = rightmost(!is_bos@j & is_a@j & !is_b@j & !h1_1@j | !is_bos@j & !h1_1@j, !is_bos@j & is_a@j & !is_b@j | h1_1@i & !is_bos@j & h1_1@j)
+h4_1 = rightmost(is_bos@i & is_a@i & !is_b@i & h1_1@i & h2_1@i & h3_1@i & is_a@j & is_b@j & !h1_1@j & !h2_1@j & !h3_1@j | h1_1@i & h2_1@i & h3_1@i & !h3_1@j, h1_1@i & h3_1@i | h1_1@i & h2_1@i & h3_1@i)
+h5_1 = rightmost(!is_bos@j & !h1_1@j & !h3_1@j & !h4_1@j | !is_bos@j & !h1_1@j & !h3_1@j, !is_bos@j & is_a@j & !is_b@j | !is_bos@j & !h1_1@j & !h2_1@j & !h3_1@j & !h4_1@j)
+accept = !is_bos & !h1_1 & !h3_1 & !h4_1 & !h5_1 | !is_bos & !h1_1 & !h3_1 & !h5_1
+
+output accept

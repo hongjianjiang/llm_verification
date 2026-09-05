@@ -246,6 +246,47 @@ class RealUhatExtractionTests(unittest.TestCase):
         self.assertEqual(int(head.chosen(scores)[3].item()), 2)  # rightmost = i-1
 
 
+class PaddingTests(unittest.TestCase):
+    """`uhat.pad` must add depth and change nothing else.
+
+    The depth-padding experiment rests entirely on this: if a padded program
+    computed a slightly different language, every conclusion drawn from
+    comparing it to its source would be about two different targets.
+    """
+
+    def test_padding_preserves_the_language(self):
+        from uhat.pad import pad_program
+        from uhat.programs import attention_depth
+
+        for name in ("random100/rand_012", "random100/rand_032", "random100/rand_000"):
+            source = Path("examples/brasp") / f"{name}.brasp"
+            if not source.exists():
+                self.skipTest(f"{source} not generated")
+            program = brasp.parse(source.read_text())
+            base = attention_depth(program)
+            for target in (base + 1, base + 4, 9):
+                padded = pad_program(program, target)
+                self.assertEqual(attention_depth(padded), target)
+                for length in range(0, 9):
+                    for word in itertools.product(program.alphabet, repeat=length):
+                        self.assertEqual(
+                            brasp.accepts(program, list(word)),
+                            brasp.accepts(padded, list(word)),
+                            f"{name} padded to {target} differs on {''.join(word) or 'eps'}",
+                        )
+
+    def test_padding_refuses_to_shrink(self):
+        from uhat.pad import pad_program
+        from uhat.programs import attention_depth
+
+        source = Path("examples/brasp/random100/rand_000.brasp")
+        if not source.exists():
+            self.skipTest(f"{source} not generated")
+        program = brasp.parse(source.read_text())
+        with self.assertRaises(ValueError):
+            pad_program(program, attention_depth(program) - 1)
+
+
 @unittest.skipUnless(os.environ.get("UHAT_SLOW_TESTS"), "set UHAT_SLOW_TESTS=1")
 class TrainingTests(unittest.TestCase):
     def test_ends_ab_trains_and_generalises(self):

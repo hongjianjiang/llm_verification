@@ -1,0 +1,29 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+n0 = leftmost(is_a@i, !is_bos@i & is_a@j | is_a@i & !is_b@i & is_bos@j)
+n1 = leftmost(!n0@j & is_bos@i | !n0@i & is_bos@j, false)
+n2 = leftmost(n0@i & !is_bos@j | !n0@i, !is_bos@i & !is_a@i & !is_a@j | !n0@j)
+n3 = is_a | !n2
+n4 = leftmost(n3@j & !n2@i | !is_bos@j & n2@j, !is_bos@i & is_a@j | n0@i & !n3@j)
+n5 = rightmost(!is_b@i & is_bos@i | !is_a@i, !n0@j)
+n6 = leftmost(n2@j | n1@j & !n0@i, !n0@j & !n4@j)
+n7 = rightmost(!is_a@i, n5@i & is_b@j)
+n8 = rightmost(n5@i & n6@j, !is_b@i & !is_b@j)
+n9 = leftmost(is_b@i | !n3@i & is_a@j, is_a@j & n8@i)
+n10 = leftmost(!n1@j | is_bos@j & !n1@i, !n4@j & n1@j)
+n11 = is_b | !n2 & !n9
+n12 = leftmost(!n11@i, is_bos@j)
+n13 = rightmost(n2@j, !n4@i & n6@j)
+n14 = rightmost(n7@j, !n13@j)
+n15 = rightmost(n8@j & n9@j, !n1@j & n10@j | n8@i & n5@j)
+n16 = leftmost(!n14@i & !n15@i, !is_a@i & !n9@j)
+n17 = rightmost(n3@j | !n13@i & !n9@i, n13@j | n0@j & n14@j)
+n18 = leftmost(n1@i | !is_bos@i, n17@j & n3@i | n8@j & !n6@j)
+n19 = rightmost(!is_b@j, !n11@i & !n13@j | n4@j & !n18@i)
+n20 = leftmost(n13@i, !n1@i & !n17@i & !n18@j | !n16@j)
+accept = n20
+
+output accept

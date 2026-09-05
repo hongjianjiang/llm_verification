@@ -25,3 +25,6 @@ docs/
 iclr/
 # OS
 .DS_Store
+
+# ABC shell history, written into the cwd on every run
+abc.history

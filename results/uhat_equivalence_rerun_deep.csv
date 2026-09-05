@@ -1,0 +1,2 @@
+task,layers,heads,terms,attention_ops,verdict,equivalence_seconds
+rand_000,6,1,2,0,PROVED,0.95

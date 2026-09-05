@@ -305,9 +305,43 @@ def resolve(name: str) -> Task:
     )
 
 
+def iid_split(
+    alphabet: Sequence[str],
+    upto: int,
+    fraction: float = 0.8,
+    seed: int = 0,
+) -> tuple[list[tuple[str, ...]], list[tuple[str, ...]]]:
+    """A classical random split of every word up to `upto`: 80% train, 20% held out.
+
+    This is the evaluation protocol most machine-learning work uses, and it is
+    a strictly weaker check than the length split `datasets` builds. Train and
+    holdout are drawn from one population, so a model that has fitted the
+    lengths it was shown scores well on the holdout without generalising past
+    them at all. Reporting both is what makes the difference visible.
+    """
+    words = enumerate_words(alphabet, upto)
+    rng = random.Random(seed)
+    rng.shuffle(words)
+    cut = int(len(words) * fraction)
+    return words[:cut], words[cut:]
+
+
+def population_upto(alphabet: Sequence[str], budget: int = 5000) -> int:
+    """Largest length whose full enumeration still fits in `budget` words.
+
+    Chosen per alphabet so a two-letter and a three-letter language get
+    comparably sized populations rather than comparable lengths.
+    """
+    size, upto, total = len(alphabet), 0, 1
+    while total + size ** (upto + 1) <= budget:
+        upto += 1
+        total += size**upto
+    return upto
+
+
 def datasets(
     task: Task,
-    enumerate_upto: int = 8,
+    enumerate_upto: int | None = None,
     train_samples: int = 512,
     train_length: tuple[int, int] = (9, 16),
     test_samples: int = 2000,
@@ -322,7 +356,13 @@ def datasets(
     """
     rng = random.Random(seed)
     if task.lengths is not None:
-        enumerate_upto, train_length, test_length = task.lengths
+        planned, train_length, test_length = task.lengths
+        # An explicit `enumerate_upto` is a deliberate choice of how much of
+        # the language the model is shown, so it outranks the task's own plan;
+        # without this the plan silently pins coverage and the flag is dead.
+        enumerate_upto = planned if enumerate_upto is None else enumerate_upto
+    elif enumerate_upto is None:
+        enumerate_upto = 8
     train = enumerate_words(task.alphabet, enumerate_upto)
     train += balanced_sample(task, train_samples, *train_length, rng=rng)
     test = balanced_sample(task, test_samples, *test_length, rng=rng)

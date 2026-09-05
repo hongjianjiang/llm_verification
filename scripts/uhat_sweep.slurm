@@ -26,7 +26,7 @@
 #   sbatch --array=1-$(wc -l < results/uhat_sweep/grid.txt) scripts/uhat_sweep.slurm
 #   scripts/uhat_sweep.py collect
 #
-# Env: GRID, OUTDIR, STEPS, RESTARTS, BATCH, VENV_DIR, WHEEL_INDEX, DEVICE.
+# Env: GRID, OUTDIR, STEPS, RESTARTS, BATCH, UPTO, SPLIT, VENV_DIR, WHEEL_INDEX, DEVICE.
 set -euo pipefail
 
 # First positional arg wins: `sbatch ... uhat_sweep.slurm my_grid.txt`.
@@ -39,6 +39,14 @@ OUTDIR="${2:-${OUTDIR:-results/uhat_sweep}}"
 STEPS="${STEPS:-1500}"
 RESTARTS="${RESTARTS:-3}"
 BATCH="${BATCH:-0}"   # 0 = full batch; set e.g. 512 for the long-word dot_depth cells
+# Training coverage: enumerate every word up to this length into the training
+# set. Empty means the task's own plan decides (7 letters<=2, 5 otherwise),
+# which is what every sweep so far used; scripts/uhat_coverage.py sets it to
+# shrink the exhaustively-checked band on purpose.
+UPTO="${UPTO:-}"
+# Evaluation protocol: "length" (default) trains on short words and tests on
+# longer ones; "iid" is the classical 80/20 split of one word population.
+SPLIT="${SPLIT:-}"
 # A GPU allocation implies CUDA wheels and cuda training; no allocation
 # implies the much smaller CPU wheels. Auto-detected so that switching
 # partitions needs no --export (which this cluster's sbatch rejects).
@@ -113,5 +121,7 @@ echo "[3/3] $stem (array ${SLURM_ARRAY_TASK_ID}, device=$DEVICE, $OMP_NUM_THREAD
 "$PYTHON" -u -m uhat.train \
   "${TASK_ARGS[@]}" --layers "$layers" --heads "$heads" --terms "$terms" \
   --steps "$STEPS" --restarts "$RESTARTS" --batch "$BATCH" --device "$DEVICE" --quiet \
+  ${UPTO:+--enumerate-upto "$UPTO"} \
+  ${SPLIT:+--split "$SPLIT"} \
   --out "$OUTDIR/programs/${stem}.brasp" \
   --json-out "$OUTDIR/${stem}.json"

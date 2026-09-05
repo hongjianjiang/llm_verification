@@ -1,0 +1,21 @@
+{
+  "task": "rand_022",
+  "source": "examples/brasp/random100/rand_022.brasp",
+  "star_free": true,
+  "layers": 4,
+  "heads": 1,
+  "terms": 1,
+  "steps": 1500,
+  "restarts": 12,
+  "seed": 0,
+  "best_seed": 3,
+  "model_hard_accuracy": 0.962329,
+  "train_accuracy": 0.962329,
+  "test_accuracy": 0.9665,
+  "test_positive_rate": 0.5,
+  "test_words": 2000,
+  "disagreements": 0,
+  "attention_ops": 4,
+  "seconds": 674.6,
+  "program": "alphabet a b c\n\nis_bos = bos\nis_a = symbol a\nis_b = symbol b\nis_c = symbol c\nh1_1 = rightmost(!is_a@i & !is_bos@j & !is_a@j & !is_b@j & is_c@j, !is_a@i & !is_bos@j)\nh2_1 = rightmost(is_a@i & !is_b@i & !is_c@i, is_a@i & is_bos@j & !is_a@j)\nh3_1 = rightmost(!h1_1@i & !is_bos@j & is_a@j & !is_b@j & !is_c@j & !h1_1@j, !is_bos@j & is_a@j & !is_b@j & h2_1@j)\nh4_1 = rightmost(!is_bos@j & !is_a@j & is_b@j & !is_c@j & !h1_1@j & !h2_1@j & !h3_1@j, is_b@j & !h1_1@j)\naccept = !is_a & h1_1 & !h2_1 & !h3_1 & !h4_1\n\noutput accept\n"
+}

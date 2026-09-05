@@ -229,7 +229,9 @@ def sample_diverse(
     rng: random.Random,
     min_states: int = 4,
     band: tuple[float, float] = (0.08, 0.92),
+    min_depth: int = 1,
     max_depth: int = 4,
+    attention_ops: tuple[int, int] = (2, 4),
     alphabets: Sequence[tuple[str, ...]] = (("a", "b"), ("a", "b", "c")),
     known: Sequence = (),
     attempts: int = 6000,
@@ -249,10 +251,11 @@ def sample_diverse(
     while len(kept) < count and tally["drawn"] < attempts:
         tally["drawn"] += 1
         program = random_program(
-            rng, rng.choice(list(alphabets)), rng.randint(2, 4), rng.randint(0, 2)
+            rng, rng.choice(list(alphabets)),
+            rng.randint(*attention_ops), rng.randint(0, 2),
         )
         facts = describe_language(program, rng)
-        if facts["depth"] < 1 or facts["depth"] > max_depth:
+        if facts["depth"] < max(1, min_depth) or facts["depth"] > max_depth:
             tally["too_shallow"] += 1
             continue
         if not (band[0] <= facts["long_rate"] <= band[1]):

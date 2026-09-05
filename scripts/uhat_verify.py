@@ -16,6 +16,7 @@ import argparse
 import csv
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -32,6 +33,12 @@ def main() -> int:
     parser.add_argument("--learned", type=Path, default=Path("results/uhat_sweep/programs"))
     parser.add_argument("--jar", default="target/scala-3.5.1/brasp-verification.jar")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="write one row per language: verdict and seconds, so the cost of "
+        "an equivalence proof can be reported alongside training cost",
+    )
     parser.add_argument(
         "--flat",
         action="store_true",
@@ -78,6 +85,7 @@ def main() -> int:
         return 1
 
     proved = differ = errored = 0
+    records: list[dict] = []
     for name, row in sorted(best.items()):
         spec = args.specs / f"{name}.brasp"
         learned = args.learned / f"{stem_of(row, args.flat)}.brasp"
@@ -85,6 +93,7 @@ def main() -> int:
             print(f"{name:<40} MISSING {learned}")
             errored += 1
             continue
+        started = time.perf_counter()
         try:
             result = subprocess.run(
                 ["java", "-jar", args.jar, "--equivalent", str(spec), str(learned), "--run-abc"],
@@ -94,6 +103,7 @@ def main() -> int:
             print(f"{name:<40} TIMEOUT after {args.timeout}s")
             errored += 1
             continue
+        elapsed = time.perf_counter() - started
         output = (result.stdout + result.stderr).strip()
         if "NOT PROVED" in output:
             differ += 1
@@ -104,7 +114,21 @@ def main() -> int:
         else:
             errored += 1
             mark = "ERROR"
-        print(f"{name:<40} {mark:<12} [{row['attention_ops']} ops, l{row['layers']} h{row['heads']} t{row['terms']}]")
+        records.append({
+            "task": name, "layers": row["layers"], "heads": row["heads"],
+            "terms": row["terms"], "attention_ops": row["attention_ops"],
+            "verdict": mark, "equivalence_seconds": round(elapsed, 2),
+        })
+        print(f"{name:<40} {mark:<12} [{row['attention_ops']} ops, l{row['layers']} h{row['heads']} t{row['terms']}]"
+              f" {elapsed:6.2f}s")
+
+    if args.out and records:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(records[0]), lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(records)
+        print(f"wrote {args.out}")
 
     print(f"\n{proved} proved equivalent, {differ} provably different, {errored} errored")
     return 0 if differ == 0 and errored == 0 else 1

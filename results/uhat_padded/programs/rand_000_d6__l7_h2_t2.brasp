@@ -1,0 +1,14 @@
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+h1_1 = rightmost(is_bos@i & is_a@i & !is_b@i & !is_c@i & is_bos@j & !is_b@j & !is_c@j | is_a@i & !is_b@i & !is_c@i & is_bos@j & is_a@j & !is_b@j & !is_c@j, is_bos@i & is_a@i & !is_b@i & !is_c@i & !is_bos@j | is_bos@i & is_a@i & !is_b@i & !is_c@i & !is_a@j & !is_b@j & !is_c@j)
+h1_2 = leftmost(!is_a@i & !is_bos@j & !is_c@j, !is_a@i & !is_a@j & is_b@j & !is_c@j | !is_a@i & !is_a@j)
+h2_1 = rightmost(is_bos@i & is_a@i & !is_b@i & !is_c@i & !h1_2@i & is_bos@j & is_a@j & is_b@j & is_c@j & h1_1@j & !h1_2@j | is_bos@i & is_a@i & is_b@i & is_c@i & h1_1@i & !h1_2@i & is_bos@j & is_a@j & is_b@j & is_c@j & h1_1@j, is_bos@i & is_a@i & !is_b@i & is_c@i & h1_1@i & !h1_2@i & is_bos@j & is_a@j & is_b@j & !is_c@j & h1_1@j & h1_2@j | is_bos@i & is_a@i & !is_c@i & h1_1@i & !h1_2@i & is_bos@j & is_a@j & is_b@j & is_c@j & !h1_2@j)
+h2_2 = leftmost(is_bos@i & is_a@i & is_b@i & is_c@i & h1_1@i & !h1_2@i & is_bos@j & is_a@j & is_b@j & is_c@j & h1_2@j | is_a@i & !is_c@i & h1_1@i & h1_2@i & !is_bos@j & is_a@j & is_b@j & !is_c@j & h1_2@j, is_bos@i & is_a@i & is_b@i & !is_c@i & h1_1@i & h1_2@i & is_a@j & is_b@j & is_c@j & !h1_1@j & !h1_2@j | is_a@i & !is_b@i & h1_1@i & h1_2@i & !is_bos@j & is_b@j & is_c@j & h1_2@j)
+h3_2 = leftmost(!h1_2@i & !h2_1@i & !h2_1@j & !h2_2@j | !is_bos@j & !is_c@j, !h1_2@i & !is_b@j & !h1_2@j | is_a@j & !is_b@j & !h1_2@j)
+accept = !is_a & h1_2 & !h3_2 | !is_bos & !is_a & h1_2 & !h2_1 & !h3_2
+
+output accept

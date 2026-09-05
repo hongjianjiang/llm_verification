@@ -1,0 +1,18 @@
+alphabet a b c
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+h1_1 = rightmost(!is_a@i & !is_b@i & is_c@i & !is_bos@j & !is_b@j & is_c@j | is_bos@i & !is_a@i & !is_b@i & is_c@i & !is_bos@j & !is_b@j & is_c@j, !is_a@i & !is_b@i & is_c@i & !is_bos@j & !is_b@j | !is_a@i & !is_bos@j & !is_b@j)
+h2_1 = rightmost(is_a@i & !is_c@i & !h1_1@i & is_bos@j & !is_a@j & !is_c@j & !h1_1@j, is_a@i & !h1_1@i & !is_c@j | is_a@i & !is_c@i & !is_a@j)
+h3_1 = rightmost(is_a@i & !is_c@i & !h1_1@i & !is_a@j & !h2_1@j | !is_c@i & !h1_1@i & !is_a@j, !is_c@i & !h1_1@i & !is_c@j & !h1_1@j | !is_c@i & !h1_1@i & !is_a@j & !is_c@j & !h1_1@j)
+h4_1 = rightmost(!is_a@i & is_c@i & h1_1@i & !h2_1@i & !is_bos@j & is_a@j & !h3_1@j | is_bos@i & !is_a@i & !is_b@i & is_c@i & h1_1@i & h2_1@i & h3_1@i & !is_bos@j & is_a@j & !is_b@j & is_c@j & h1_1@j & h2_1@j & h3_1@j, !is_a@i & !is_b@i & is_c@i & !h3_1@i & !is_b@j | !is_b@i & is_c@i & !is_bos@j & !is_b@j)
+h5_1 = rightmost(is_bos@i & is_a@i & !is_c@i & !h1_1@i & h2_1@i & !h4_1@i & is_bos@j & !is_a@j & is_b@j & !h1_1@j & h2_1@j & h4_1@j | is_a@i & is_b@i & !h1_1@i & h2_1@i & h3_1@i & h4_1@i & is_bos@j & is_a@j & is_c@j & !h1_1@j & h3_1@j & h4_1@j, !h1_1@i & h2_1@i & h4_1@i & is_bos@j & !is_a@j & is_c@j & h1_1@j | is_a@i & is_b@i & h2_1@i & is_a@j & is_c@j & h1_1@j)
+h6_1 = rightmost(!is_c@i & h1_1@i & !h4_1@i & is_bos@j & is_b@j & is_c@j & !h1_1@j & h2_1@j & h5_1@j | is_a@i & is_b@i & !is_c@i & h1_1@i & !h4_1@i & is_bos@j & is_a@j & is_b@j & !is_c@j & h1_1@j & !h2_1@j, is_a@i & !is_c@i & h2_1@i & !h4_1@i & is_a@j & is_c@j & h1_1@j & h2_1@j | is_bos@i & !h1_1@i & h2_1@i & h3_1@i & is_a@j & is_b@j & h1_1@j & h2_1@j & h4_1@j & h5_1@j)
+h7_1 = rightmost(is_a@i & h1_1@i & h3_1@i & h6_1@i & !is_a@j & h2_1@j & h3_1@j & h4_1@j | is_b@i & !is_c@i & h2_1@i & h4_1@i & h5_1@i & h6_1@i & is_bos@j & is_a@j & !h1_1@j & h4_1@j & h5_1@j, is_bos@i & is_b@i & h1_1@i & !is_a@j & is_b@j & !h1_1@j & h2_1@j | !is_c@i & h1_1@i & h4_1@j & h6_1@j)
+h8_1 = rightmost(is_b@i & !h1_1@i & !h2_1@i & h5_1@i & h6_1@i & h7_1@i & is_bos@j & h2_1@j & h6_1@j | is_a@i & is_b@i & !h1_1@i & h2_1@i & h3_1@i & h4_1@i & h6_1@i & !is_a@j & !h2_1@j & h3_1@j & h5_1@j & h7_1@j, is_bos@i & h3_1@i & !h4_1@i & h6_1@i & !is_a@j & h4_1@j | is_bos@i & is_a@i & h3_1@i & !h4_1@i & !h2_1@j & h5_1@j & h7_1@j)
+h9_1 = rightmost(true, !h8_1@i & !is_a@j & !h4_1@j | !h4_1@i)
+accept = !is_bos & !is_a & !is_b & is_c & !h3_1 & h4_1 & !h5_1 & !h9_1 | !is_a & !is_b & is_c & h1_1 & !h3_1 & h4_1 & !h5_1 & !h6_1 & !h8_1 & !h9_1
+
+output accept

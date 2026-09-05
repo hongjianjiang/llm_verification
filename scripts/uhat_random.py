@@ -39,6 +39,9 @@ def main(argv=None) -> int:
     parser.add_argument("--manifest", type=Path, default=Path("results/uhat_random.csv"))
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--max-depth", type=int, default=4)
+    parser.add_argument("--min-depth", type=int, default=1)
+    parser.add_argument("--attention-ops", type=int, nargs=2, default=[2, 4],
+                        help="range of attention ops per program; raise it to reach deeper languages")
     parser.add_argument(
         "--min-states",
         type=int,
@@ -67,7 +70,8 @@ def main(argv=None) -> int:
                 known.append(signature)
         kept, tally = sample_diverse(
             args.count, rng, min_states=args.min_states,
-            max_depth=args.max_depth, known=known,
+            min_depth=args.min_depth, max_depth=args.max_depth,
+            attention_ops=tuple(args.attention_ops), known=known,
         )
         print(f"drew {tally['drawn']}: {tally['degenerate']} degenerate, "
               f"{tally['too_shallow']} out of depth range, "

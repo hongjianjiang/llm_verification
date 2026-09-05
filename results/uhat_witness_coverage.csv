@@ -1,0 +1,2 @@
+task,upto,layers,heads,terms,verdict,witness_length,witness,searched_upto,words_searched,disagreements,profile
+rand_050,2,4,1,2,DIFFERENT,3,bac,10,88572,36,1:0/3;2:0/9;3:1/27;4:2/81;5:3/243;6:4/729;7:5/2187;8:6/6561;9:7/19683;10:8/59049

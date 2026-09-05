@@ -30,7 +30,7 @@ from . import brasp
 from .extract import encode, extract, model_accepts, verify_equivalence
 from .model import BooleanUhat, Schedule, UhatConfig
 from .programs import program_task
-from .tasks import TASKS, Task, datasets, resolve
+from .tasks import TASKS, Task, datasets, iid_split, population_upto, resolve
 
 _EPS = 1e-6
 
@@ -195,7 +195,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hard-lr", type=float, default=0.01)
     parser.add_argument("--hard-fraction", type=float, default=0.25)
-    parser.add_argument("--enumerate-upto", type=int, default=8)
+    parser.add_argument(
+        "--split",
+        choices=("length", "iid"),
+        default="length",
+        help="'length' (default) trains on short words and tests on longer ones; "
+        "'iid' takes one population of words and splits it 80/20, the protocol "
+        "most machine-learning work uses",
+    )
+    parser.add_argument("--split-upto", type=int,
+                        help="population for --split iid: every word up to this length "
+                        "(default: the longest that keeps the population under 5000)")
+    parser.add_argument("--split-fraction", type=float, default=0.8)
+    parser.add_argument(
+        "--enumerate-upto",
+        type=int,
+        help="enumerate every word up to this length into the training set, "
+        "overriding the task's own length plan; this is the knob the coverage "
+        "sweep turns, since it sets where exhaustive checking stops and the "
+        "band no test set reaches begins",
+    )
     parser.add_argument("--batch", type=int, default=0, help="0 = full batch")
     parser.add_argument("--out", type=Path, help="write the extracted .brasp program here")
     parser.add_argument("--json-out", type=Path, help="write one machine-readable result record here")
@@ -218,12 +237,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(error).strip("'"))
     verbose = not args.quiet
     # A task that carries its own length plan knows better than the CLI default.
-    upto = (
-        task.lengths[0]
-        if task.lengths is not None
-        else _enumerate_budget(task.alphabet, args.enumerate_upto)
-    )
+    if args.enumerate_upto is not None:
+        upto = args.enumerate_upto
+    elif task.lengths is not None:
+        upto = task.lengths[0]
+    else:
+        upto = _enumerate_budget(task.alphabet, 8)
     train_words, test_words = datasets(task, enumerate_upto=upto, seed=args.seed)
+    # The classical machine-learning protocol, as an alternative to the length
+    # split above: one population of words, 80% trained on and 20% held out.
+    # The long-word set is kept either way, so the two protocols can be
+    # compared on the same model rather than across separate runs.
+    holdout_words: list = []
+    if args.split == "iid":
+        split_upto = args.split_upto or population_upto(task.alphabet)
+        train_words, holdout_words = iid_split(
+            task.alphabet, split_upto, args.split_fraction, seed=args.seed
+        )
+        upto = split_upto
 
     config = UhatConfig(
         alphabet=task.alphabet,
@@ -244,8 +275,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"task {task.name} ({'star-free' if task.star_free else 'NOT star-free'}), "
         f"alphabet {{{', '.join(task.alphabet)}}}, "
-        f"{len(train_words)} train words (len <= {upto} enumerated + samples), "
-        f"{len(test_words)} longer test words"
+        f"{len(train_words)} train words "
+        + (f"(80/20 split of every word to len {upto}), "
+           if args.split == "iid"
+           else f"(len <= {upto} enumerated + samples), ")
+        + (f"{len(holdout_words)} held-out words, " if holdout_words else "")
+        + f"{len(test_words)} longer test words"
     )
     started = time.monotonic()
     fit = fit_best(task, config, schedule, train_words, verbose, args.device)
@@ -271,7 +306,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     test_accuracy = _accuracy(
         [brasp.accepts(program, w) for w in test_words], _labels(task, test_words)
     )
-    print(f"program accuracy: train {train_accuracy:.4f}, longer-word test {test_accuracy:.4f}")
+    holdout_accuracy = (
+        _accuracy(
+            [brasp.accepts(program, w) for w in holdout_words], _labels(task, holdout_words)
+        )
+        if holdout_words
+        else None
+    )
+    print(
+        f"program accuracy: train {train_accuracy:.4f}, "
+        + (f"held-out {holdout_accuracy:.4f}, " if holdout_accuracy is not None else "")
+        + f"longer-word test {test_accuracy:.4f}"
+    )
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +336,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             # the other; without this the two collapse in the sweep CSV.
             "source": str(args.brasp) if args.brasp else "",
             "star_free": task.star_free,
+            # The coverage this model was trained at: everything up to
+            # `enumerate_upto` was shown exhaustively, so a distinguishing word
+            # longer than it is one the training set could not have ruled out.
+            "enumerate_upto": upto,
+            "split": args.split,
+            "train_words": len(train_words),
+            "holdout_words": len(holdout_words),
+            "holdout_accuracy": (
+                round(holdout_accuracy, 6) if holdout_accuracy is not None else ""
+            ),
             "layers": args.layers,
             "heads": args.heads,
             "terms": args.terms,

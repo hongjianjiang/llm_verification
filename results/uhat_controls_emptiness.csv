@@ -1,0 +1,16 @@
+source,stem,verdict,emptiness_seconds,train_seconds
+examples/brasp/random100/rand_100.brasp,rand_100__l3_h1_t1,empty,1.66,51.8
+examples/brasp/random100/rand_101.brasp,rand_101__l2_h1_t1,empty,1.16,42.4
+examples/brasp/random100/rand_102.brasp,rand_102__l2_h1_t1,empty,1.14,43.1
+examples/brasp/random100/rand_103.brasp,rand_103__l2_h1_t1,empty,1.18,44.1
+examples/brasp/random100/rand_104.brasp,rand_104__l3_h1_t1,empty,1.58,50.5
+examples/brasp/random100/rand_105.brasp,rand_105__l3_h1_t1,empty,1.39,50.3
+examples/brasp/random100/rand_106.brasp,rand_106__l4_h1_t1,empty,1.3,62.3
+examples/brasp/random100/rand_107.brasp,rand_107__l2_h1_t1,empty,1.04,46.1
+examples/brasp/random_deep/rand_024.brasp,rand_024__l2_h1_t1,empty,1.06,42.5
+examples/brasp/random_deep/rand_025.brasp,rand_025__l1_h1_t1,empty,1.03,29.6
+examples/brasp/random_deep/rand_026.brasp,rand_026__l3_h1_t1,empty,1.11,50.9
+examples/brasp/random_deep/rand_027.brasp,rand_027__l2_h1_t1,empty,1.07,42.4
+examples/brasp/random_deeper/rand_016.brasp,rand_016__l1_h1_t1,empty,1.22,28.4
+examples/brasp/random_deeper/rand_017.brasp,rand_017__l2_h1_t1,empty,1.19,42.4
+examples/brasp/random_deeper/rand_018.brasp,rand_018__l2_h1_t1,empty,1.1,43.3
