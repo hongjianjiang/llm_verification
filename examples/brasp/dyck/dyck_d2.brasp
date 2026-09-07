@@ -1,0 +1,30 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+prev_b = rightmost(true, is_b@j)
+prev_bos = rightmost(true, is_bos@j)
+prev2_a = rightmost(true, prev_a@j)
+prev2_b = rightmost(true, prev_b@j)
+aa = is_a & prev_a
+bb = is_b & prev_b
+mark = aa | bb
+alt = is_a & (prev_b | prev_bos) | is_b & prev_a
+aaa = is_a & prev_a & prev2_a
+bbb = is_b & prev_b & prev2_b
+bad_here = !alt & !mark & !is_bos | aaa | bbb
+prev_mark_aa = rightmost(mark@j, aa@j)
+prev_mark_bb = rightmost(mark@j, bb@j)
+any_prev_mark = rightmost(mark@j, true)
+viol = bb & !prev_mark_aa | aa & any_prev_mark & !prev_mark_bb
+bad_before = rightmost(bad_here@j | viol@j, true)
+at_first = rightmost(true, is_bos@j)
+first_b = is_b & at_first
+seen_first_b = rightmost(first_b@j, true)
+bad_first = seen_first_b | first_b
+last_ok = mark & bb | !mark & (!any_prev_mark | prev_mark_bb)
+accept = is_b & !bad_here & !viol & !bad_before & !bad_first & last_ok
+
+output accept

@@ -1,0 +1,34 @@
+alphabet a m
+
+is_m = symbol m
+h_1 = is_m
+p_2 = rightmost(is_m@j, h_1@j)
+h_2 = is_m & p_2
+p_3 = rightmost(is_m@j, h_2@j)
+h_3 = is_m & p_3
+p_4 = rightmost(is_m@j, h_3@j)
+h_4 = is_m & p_4
+p_5 = rightmost(is_m@j, h_4@j)
+h_5 = is_m & p_5
+p_6 = rightmost(is_m@j, h_5@j)
+h_6 = is_m & p_6
+p_7 = rightmost(is_m@j, h_6@j)
+h_7 = is_m & p_7
+p_8 = rightmost(is_m@j, h_7@j)
+h_8 = is_m & p_8
+p_9 = rightmost(is_m@j, h_8@j)
+h_9 = is_m & p_9
+p_10 = rightmost(is_m@j, h_9@j)
+h_10 = is_m & p_10
+p_11 = rightmost(is_m@j, h_10@j)
+h_11 = is_m & p_11
+p_12 = rightmost(is_m@j, h_11@j)
+h_12 = is_m & p_12
+p_13 = rightmost(is_m@j, h_12@j)
+h_13 = is_m & p_13
+p_14 = rightmost(is_m@j, h_13@j)
+h_14 = is_m & p_14
+seen_14 = rightmost(h_14@j, true)
+accept = h_14 | seen_14
+
+output accept

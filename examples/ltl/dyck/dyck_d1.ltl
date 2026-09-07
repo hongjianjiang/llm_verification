@@ -1,0 +1,12 @@
+logic past-strict
+alphabet a b
+
+f_a := sym(a)@i
+f_b := sym(b)@i
+f_pa := Y(f_a@j)
+f_pb := Y(f_b@j)
+f_alt := ((f_a@i & (bos@i | f_pb@i)) | (f_b@i & f_pa@i))
+f_hist := H(f_alt@j)
+f_out := (f_b@i & (f_alt@i & f_hist@i))
+
+output := f_out@i

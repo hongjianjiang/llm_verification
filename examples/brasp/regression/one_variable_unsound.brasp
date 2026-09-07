@@ -1,0 +1,18 @@
+alphabet a b
+
+# Language: b+ (the last symbol is b and no a occurs before it).
+# Nonempty -- "b" and "bb" are members, checked with --word.
+#
+# The one-variable route calls this EMPTY:
+#   java -jar JAR this.brasp --run-native                  -> sat, witness "b"   (correct)
+#   java -jar JAR this.brasp --run-abc                     -> NOT PROVED         (correct)
+#   java -jar JAR this.brasp --one-variable --run-native   -> unsat, "empty"     (WRONG)
+#
+# The trigger is a negated attention conjoined with another condition:
+# `!seen_a` alone is answered correctly, `is_b & !seen_a` is not.
+is_a = symbol a
+is_b = symbol b
+seen_a = rightmost(is_a@j, true)
+accept = is_b & !seen_a
+
+output accept

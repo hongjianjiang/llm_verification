@@ -1,0 +1,13 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+prev_b = rightmost(true, is_b@j)
+prev_bos = rightmost(true, is_bos@j)
+alt = is_a & (prev_b | prev_bos) | is_b & prev_a
+bad = rightmost(!alt@j & !is_bos@j, true)
+accept = is_b & alt & !bad
+
+output accept

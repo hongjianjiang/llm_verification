@@ -1,0 +1,8 @@
+logic past-strict
+alphabet a b
+
+is_a := sym(a)@i
+_split1 := (!(is_a@j)) S ((is_a@j & true))
+
+output := (sym(b)@i & !(_split1@i))
+evaluate at i = |w| (the final input position)

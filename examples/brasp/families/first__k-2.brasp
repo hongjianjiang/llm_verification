@@ -1,0 +1,15 @@
+alphabet a b
+
+is_a = symbol a
+is_b = symbol b
+seen_a = rightmost(is_a@j, true)
+occurs_a = seen_a | is_a
+seen_b = rightmost(is_b@j, true)
+occurs_b = seen_b | is_b
+pair_ab = is_a | is_b
+any_ab = rightmost(pair_ab@j, true)
+first_ab = leftmost(pair_ab@j, is_a@j)
+ok_ab = any_ab & first_ab | !any_ab & is_a
+accept = ok_ab & occurs_a & occurs_b
+
+output accept

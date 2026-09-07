@@ -1,0 +1,23 @@
+logic past-strict
+alphabet a b
+
+f_a := sym(a)@i
+f_b := sym(b)@i
+f_pa := Y(f_a@j)
+f_pb := Y(f_b@j)
+f_alt := ((f_a@i & (bos@i | f_pb@i)) | (f_b@i & f_pa@i))
+f_aa := (f_a@i & f_pa@i)
+f_bb := (f_b@i & f_pb@i)
+f_mark := (f_aa@i | f_bb@i)
+f_aaa := (f_a@i & Y(f_aa@j))
+f_bbb := (f_b@i & Y(f_bb@j))
+f_bad := (((!(f_alt@i) & !(f_mark@i)) | f_aaa@i) | f_bbb@i)
+f_since_aa := ((!(f_mark@j)) S (f_aa@j))
+f_since_bb := ((!(f_mark@j)) S (f_bb@j))
+f_seen_mark := P(f_mark@j)
+f_viol := ((f_bb@i & !(f_since_aa@i)) | ((f_aa@i & f_seen_mark@i) & !(f_since_bb@i)))
+f_bad_before := P((f_bad@j | f_viol@j))
+f_last_ok := ((f_mark@i & f_bb@i) | (!(f_mark@i) & (!(f_seen_mark@i) | f_since_bb@i)))
+f_out := ((((f_b@i & !(f_bad@i)) & !(f_viol@i)) & !(f_bad_before@i)) & f_last_ok@i)
+
+output := f_out@i

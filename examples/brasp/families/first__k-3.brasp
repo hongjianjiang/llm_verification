@@ -1,0 +1,22 @@
+alphabet a b c
+
+is_a = symbol a
+is_b = symbol b
+is_c = symbol c
+seen_a = rightmost(is_a@j, true)
+occurs_a = seen_a | is_a
+seen_b = rightmost(is_b@j, true)
+occurs_b = seen_b | is_b
+seen_c = rightmost(is_c@j, true)
+occurs_c = seen_c | is_c
+pair_ab = is_a | is_b
+any_ab = rightmost(pair_ab@j, true)
+first_ab = leftmost(pair_ab@j, is_a@j)
+ok_ab = any_ab & first_ab | !any_ab & is_a
+pair_bc = is_b | is_c
+any_bc = rightmost(pair_bc@j, true)
+first_bc = leftmost(pair_bc@j, is_b@j)
+ok_bc = any_bc & first_bc | !any_bc & is_b
+accept = ok_ab & ok_bc & occurs_a & occurs_b & occurs_c
+
+output accept

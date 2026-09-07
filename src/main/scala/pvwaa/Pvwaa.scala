@@ -222,10 +222,28 @@ object Pvwaa:
       val discovered = definitions.values.flatMap(symbolsOf).toSet.toList.sorted
       (declared ++ discovered).distinct
 
-    val ranks: Map[String, Int] =
-      names.zipWithIndex.flatMap { case (name, index) => duals.map(dual => stateName(name, dual) -> index) }.toMap
+    // A temporal operator nested inside a Boolean combination cannot borrow
+    // the enclosing state for its fixpoint. `Until` unrolls by looping with
+    // `Leave` to `current`, which is right only when the operator *is* the
+    // body: for `b & !(x S y)` the loop would come back to the whole
+    // conjunction and re-impose `b` at every earlier position, quietly
+    // building an automaton for a different language. Each nested operator
+    // therefore gets a state of its own to loop to. Occurrences are keyed by
+    // the subformula, so equal ones share a state rather than multiplying it.
+    val nestedNames = scala.collection.mutable.LinkedHashMap.empty[Formula, String]
+    def nestedName(formula: Formula): String =
+      nestedNames.getOrElseUpdate(
+        formula, {
+          var candidate = s"__nested${nestedNames.size + 1}__"
+          while definitions.contains(candidate) do candidate = "_" + candidate
+          candidate
+        },
+      )
 
-    def top(formula: Formula, dual: Boolean, current: String): PositiveFormula = formula match
+    def top(formula: Formula, dual: Boolean, current: String): PositiveFormula =
+      topAt(formula, dual, current, root = true)
+
+    def topAt(formula: Formula, dual: Boolean, current: String, root: Boolean): PositiveFormula = formula match
       case Constant(value) => PositiveConstant(value != dual)
       case Atom(kind, variable, sym) =>
         if variable != Position.I then throw PVWAAError("an atom at witness position belongs inside an Until operand")
@@ -233,17 +251,20 @@ object Pvwaa:
       case Reference(name, variable) =>
         if variable != Position.I then throw PVWAAError("a witness reference belongs inside an Until operand")
         TransitionAtom(stateName(name, dual), Action.Goto)
-      case Negation(operand) => top(operand, !dual, current)
+      case Negation(operand) => topAt(operand, !dual, current, root = false)
       case Conjunction(operands) =>
-        val children = operands.map(o => top(o, dual, current))
+        val children = operands.map(o => topAt(o, dual, current, root = false))
         if dual then PositiveOr(children) else PositiveAnd(children)
       case Disjunction(operands) =>
-        val children = operands.map(o => top(o, dual, current))
+        val children = operands.map(o => topAt(o, dual, current, root = false))
         if dual then PositiveAnd(children) else PositiveOr(children)
-      case Until(_, _, left, right) =>
-        val leftP = predicate(left, dual, current)
-        val rightP = predicate(right, dual, current)
-        val loop = TransitionAtom(current, Action.Leave)
+      case until @ Until(_, _, left, right) =>
+        // `owner` is the state the fixpoint loops back to: the enclosing one
+        // when this operator is the whole body, its own otherwise.
+        val owner = if root then current else stateName(nestedName(until), dual)
+        val leftP = predicate(left, dual, owner)
+        val rightP = predicate(right, dual, owner)
+        val loop = TransitionAtom(owner, Action.Leave)
         if !dual then PositiveOr(List(rightP, PositiveAnd(List(leftP, loop))))
         else PositiveAnd(List(rightP, PositiveOr(List(leftP, loop))))
       case other => throw PVWAAError(s"normalise unsupported temporal operator before PVWAA translation: $other")
@@ -279,27 +300,53 @@ object Pvwaa:
       case _: Until => dual // strict Until is false at EOS; its dual is true.
       case other => throw PVWAAError(s"normalise unsupported temporal operator before PVWAA translation: $other")
 
-    val states: List[String] = for name <- names; dual <- duals yield stateName(name, dual)
-
-    val finalStates: Set[String] =
-      (for name <- names; dual <- duals if finalOf(definitions(name), dual) yield stateName(name, dual)).toSet
-
     // One formula per state — symbol-dependence lives inside it now
     // (`PositiveFormula.SymbolTest`), not in how many times `top` gets
     // called, so this is `O(states)`, not `O(states x alphabet)`.
-    val transitionsBuilder = Map.newBuilder[String, PositiveFormula]
-    transitionsBuilder.sizeHint(names.length * duals.length)
+    val transitions = scala.collection.mutable.LinkedHashMap.empty[String, PositiveFormula]
     for
       name <- names
       dual <- duals
     do
       val current = stateName(name, dual)
-      transitionsBuilder += current -> top(definitions(name), dual, current)
+      transitions += current -> top(definitions(name), dual, current)
+
+    // Translating a body can discover nested operators, and translating one
+    // of those can discover more, so this runs to a fixpoint. The formula for
+    // a nested state is the operator translated as its own root, which is
+    // what makes its `Leave` loop refer to itself.
+    var pending = nestedNames.toList
+    var seen = Set.empty[Formula]
+    while pending.nonEmpty do
+      val (formula, base) = pending.head
+      pending = pending.tail
+      if !seen.contains(formula) then
+        seen += formula
+        for dual <- duals do transitions += stateName(base, dual) -> top(formula, dual, stateName(base, dual))
+        pending = pending ++ nestedNames.toList.filterNot((f, _) => seen.contains(f))
+
+    val nestedBases: List[String] = nestedNames.values.toList
+    val states: List[String] =
+      (for name <- names; dual <- duals yield stateName(name, dual)) ++
+        (for base <- nestedBases; dual <- duals yield stateName(base, dual))
+
+    val finalStates: Set[String] =
+      (for name <- names; dual <- duals if finalOf(definitions(name), dual) yield stateName(name, dual)).toSet ++
+        (for (formula, base) <- nestedNames.toList; dual <- duals if finalOf(formula, dual) yield stateName(base, dual))
+
+    // A nested state sits directly below the definition that introduced it,
+    // so it takes that definition's rank; the only transition into it is the
+    // `Leave` self-loop, which the very-weak ordering permits.
+    val ranks: Map[String, Int] =
+      names.zipWithIndex.flatMap { case (name, index) => duals.map(dual => stateName(name, dual) -> index) }.toMap ++
+        nestedBases.zipWithIndex.flatMap { case (base, index) =>
+          duals.map(dual => stateName(base, dual) -> (names.length + index))
+        }
 
     ForwardPVWAA(
       alphabet = alphabet,
       states = states,
-      transitions = transitionsBuilder.result(),
+      transitions = transitions.toMap,
       initialState = stateName(initialName, false),
       finalStates = finalStates,
       rank = ranks,
