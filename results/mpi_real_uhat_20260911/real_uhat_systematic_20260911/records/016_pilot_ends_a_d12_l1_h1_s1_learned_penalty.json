@@ -1,0 +1,263 @@
+{
+  "study": "pilot",
+  "task": "ends_a",
+  "width": 12,
+  "layers": 1,
+  "heads": 1,
+  "seed": 1,
+  "gate": "learned_penalty",
+  "id": "016_pilot_ends_a_d12_l1_h1_s1_learned_penalty",
+  "steps": 1500,
+  "lr": 0.02,
+  "hard_fraction": 0.4,
+  "beta_end": 32.0,
+  "cap": 20000,
+  "data_seed": 20260911,
+  "spec_sha256": "b987b87e48ea3e2103e74cb919658933d14177cb7b53a4b80d0f81586d6cefc0",
+  "status": "evaluated",
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "torch": "2.13.0+cpu",
+  "device": "cpu",
+  "hostname": "cpu20-21",
+  "job_id": "50497626",
+  "data_sha256": "8ce3b3723529d6da57c1fd12843356abde26c6d2fb30e9bfeb5fbd0c0d524dfd",
+  "source_sha256": "ad45a9b53821973a9a2a20fc4ce7ec1428e6b66aef5049e30a8a0b206c0eb833",
+  "dtype": "float32",
+  "threads": 2,
+  "optimizer": "Adam",
+  "checkpoint_rule": "minimum hard validation BCE at every 50 steps and final step; earliest on ties",
+  "extractor_atol": 1e-06,
+  "extractor_default_rtol": 1e-05,
+  "score_group_tolerance": 1e-09,
+  "train_seconds": 4.906698139006039,
+  "validation_history": [
+    {
+      "step": 50,
+      "validation_bce": 1.7926524378708564e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 100,
+      "validation_bce": 1.541028638030184e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 150,
+      "validation_bce": 1.1277641043250242e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 200,
+      "validation_bce": 0.0005792183801531792,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 250,
+      "validation_bce": 7.786196511005983e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 300,
+      "validation_bce": 4.618351886165328e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 350,
+      "validation_bce": 3.071772516705096e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 400,
+      "validation_bce": 2.2077327230363153e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 450,
+      "validation_bce": 1.657849679759238e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 500,
+      "validation_bce": 1.2912241800222546e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 550,
+      "validation_bce": 1.029319355438929e-05,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 600,
+      "validation_bce": 8.197750503313728e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 650,
+      "validation_bce": 6.887716608616756e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 700,
+      "validation_bce": 5.839503046445316e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 750,
+      "validation_bce": 5.053106178820599e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 800,
+      "validation_bce": 4.2667156776587944e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 850,
+      "validation_bce": 3.742122544281301e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 900,
+      "validation_bce": 3.217545554434764e-06,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 950,
+      "validation_bce": 3.1416476531376247e-07,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1000,
+      "validation_bce": 5.013621162675008e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1050,
+      "validation_bce": 4.823220578487053e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1100,
+      "validation_bce": 4.6401698483578e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1150,
+      "validation_bce": 4.461036340330793e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1200,
+      "validation_bce": 4.284549248723124e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1250,
+      "validation_bce": 4.1101792191966524e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1300,
+      "validation_bce": 3.9377621163794174e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1350,
+      "validation_bce": 3.767217648942278e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1400,
+      "validation_bce": 3.598711018071299e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1450,
+      "validation_bce": 3.432394279911932e-08,
+      "validation_accuracy": 1.0
+    },
+    {
+      "step": 1500,
+      "validation_bce": 3.268428727665196e-08,
+      "validation_accuracy": 1.0
+    }
+  ],
+  "checkpoint_sha256": "044542e48427c39054d9fa4fbd289ff0292b52e2badba821559e921a91ff1a6a",
+  "selected_step": 150,
+  "gates": [
+    0.007887602783739567
+  ],
+  "ordinary_accuracy": {
+    "train": 1.0,
+    "validation": 1.0,
+    "audit_1_8": 1.0,
+    "test_9_16": 1.0,
+    "test_17_32": 1.0,
+    "test_33_64": 1.0
+  },
+  "closure_seconds": 0.005382355011533946,
+  "classes": [
+    12
+  ],
+  "candidate_tuples": [
+    12
+  ],
+  "max_score_levels_per_head": [
+    [
+      3
+    ]
+  ],
+  "program_emission_seconds_including_reclosure": 0.006111559981945902,
+  "program_sha256": "d266d1ebbd32677ec534a4d36b6d4131f6c1103c0416bfc467078666056b40c2",
+  "program_nodes": 25,
+  "evaluations": {
+    "train": {
+      "n": 203,
+      "positive": 105,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    },
+    "validation": {
+      "n": 51,
+      "positive": 22,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    },
+    "audit_1_8": {
+      "n": 510,
+      "positive": 255,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    },
+    "test_9_16": {
+      "n": 256,
+      "positive": 130,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    },
+    "test_17_32": {
+      "n": 256,
+      "positive": 136,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    },
+    "test_33_64": {
+      "n": 256,
+      "positive": 114,
+      "ordinary_snapped_disagreements": 0,
+      "snapped_program_disagreements": 0,
+      "ordinary_program_disagreements": 0,
+      "program_accuracy": 1.0
+    }
+  }
+}

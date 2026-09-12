@@ -1,0 +1,11 @@
+logic past-strict
+alphabet s0 s1 s2 s3
+
+f_0 := sym(s0)@i
+f_1 := sym(s1)@i
+f_2 := sym(s2)@i
+f_3 := sym(s3)@i
+f_4 := H(!(!((f_1@i & f_0@j)) & !((f_2@i & f_0@j)) & !((f_2@i & f_1@j)) & !((f_3@i & f_0@j)) & !((f_3@i & f_1@j)) & !((f_3@i & f_2@j))))
+
+output := f_4@i
+evaluate at i = |w| (the final input position)

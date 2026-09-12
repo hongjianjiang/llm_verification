@@ -97,7 +97,7 @@ class Schedule:
 
 
 def _straight_through(hard: torch.Tensor, soft: torch.Tensor) -> torch.Tensor:
-    return hard + soft - soft.detach()
+    return hard + (soft - soft.detach())
 
 
 def binarise(x: torch.Tensor) -> torch.Tensor:

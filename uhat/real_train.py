@@ -118,10 +118,12 @@ def main(argv=None) -> int:
 
     check = list(train_words) + list(test_words)
     from_model = accepts(best, check, snap_to=snap)
+    ordinary = accepts(best, check)
     from_program = [brasp.accepts(program, w) for w in check]
     disagreements = sum(a != b for a, b in zip(from_model, from_program))
-    print(f"model/program agreement: {disagreements} disagreements"
-          + ("" if disagreements else "  -- extraction is exact"))
+    print(f"snapped model/program: {disagreements} disagreements on {len(check)} words")
+    print(f"ordinary model/program: {sum(a != b for a, b in zip(ordinary, from_program))} "
+          f"disagreements on {len(check)} words (finite validation, not a proof)")
 
     train_accuracy = sum(
         brasp.accepts(program, w) == task.label(w) for w in train_words

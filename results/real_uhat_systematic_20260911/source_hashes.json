@@ -1,0 +1,23 @@
+{
+  "uhat/tasks.py": "02af6722d928a2afdb932b98745f4d9d83d05d9aa4fcdf4a6c4ab7ed7960d628",
+  "uhat/random_programs.py": "6fa13d7ba055ca43fc5d57ad2ece9cc47b6f605d82436f88607c6812d7179d88",
+  "uhat/real_train.py": "3c83bdee4f6737f326f00053efe503e6d0aa4c4202c2c5a315b68f382d420e0d",
+  "uhat/real_extract.py": "828f8ba941d7c5de66fff21228a738214829a85039187d761f9bc97ef81a4572",
+  "uhat/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "uhat/real_model.py": "5fd5cfabb8904afbf18581d40ec4b4bc154218b70c145062f91abf58ba57e689",
+  "uhat/model.py": "1ddc979a96f134352b9cfde60be433a7ea8ad3ba789e62627d0d59666b282d60",
+  "uhat/pad.py": "18aff5649b617aaa724d304c133ab04f420c476804994c67fbb39993d40ba4a7",
+  "uhat/programs.py": "e6cbb4e2fcff04cce8885fc5bbb4afe77279a737b4b49225a4f938c8baaf9606",
+  "uhat/train.py": "9a6539e69b18d1d26b5de5e3d1ee19a3d8d7990ab91b4445256641faacd47a74",
+  "uhat/brasp.py": "553355c8792eebbe2a8a6a6611e889c0d60fc66a4ce050a38357403d02d576e0",
+  "uhat/extract.py": "e9b3b00595356f4a7ca3a811ef0b1879123109b5887d1ce7922af7d260376581",
+  "scripts/study_report.slurm": "b2f367cf743b18e2fb57d93ddb9d3a50c99ada8ed8f9e0759c57a9a47a78c1ac",
+  "scripts/real_uhat_study.py": "ad45a9b53821973a9a2a20fc4ce7ec1428e6b66aef5049e30a8a0b206c0eb833",
+  "scripts/circuit_study.slurm": "6e68bf61e8ac451f9ff455a332f4d76a51d983a5f3f409fcbbbf278fa82892e5",
+  "scripts/circuit_study.py": "b3a21bebb8b8adc74b7de72f813081aa6defb4476e286f339f1d698245e8e3ef",
+  "scripts/study_report.py": "f485f9aad1dc3d99c43e102eb76ca50e2556367ae79f4a7bd35c9405fd51e0ac",
+  "scripts/real_uhat_study.slurm": "0c652af176aaf7cda91b0c3936831541d109457c80800530ef88c0e28ba30bf7",
+  "scripts/real_uhat_certify.py": "353ef1e281f0b310d1aff3c5c15427319c7a5537ae98f800833cc4c6d4cb927b",
+  "src/main/scala/tools/CircuitStudy.scala": "f5d30a67f1fb24454e791149e46ecc0652efbd17b612c3dbdc79c7ed6205be4b",
+  "src/main/scala/aiger/Aiger.scala": "8e7cee115b148c1ffb172c782a907e4f133dacb6474edabcb6d571a43eca767e"
+}

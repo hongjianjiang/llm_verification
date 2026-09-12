@@ -1,0 +1,7 @@
+alphabet a b
+is_a = symbol a
+is_b = symbol b
+is_bos = bos
+last_other = rightmost(!(is_b@j), is_a@j)
+accept = is_b & last_other
+output accept

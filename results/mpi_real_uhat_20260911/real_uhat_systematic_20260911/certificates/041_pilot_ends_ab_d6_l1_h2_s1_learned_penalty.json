@@ -1,0 +1,26 @@
+{
+  "id": "041_pilot_ends_ab_d6_l1_h2_s1_learned_penalty",
+  "task": "ends_ab",
+  "study": "pilot",
+  "status": "equivalent",
+  "seconds": 1.2179609870072454,
+  "timeout": 120,
+  "program_sha256": "bbe0866595428837e324abcf80d0ebc16fc3d9825fedd58f7c5a13b4a991e8f2",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "b0dbc879ae4325dde5af7feb07625be12f88a1ad394a9317531da299692c8065",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/brasp-verification.jar",
+    "--equivalent",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/specs/ends_ab.brasp",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/programs/041_pilot_ends_ab_d6_l1_h2_s1_learned_penalty.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Extracted program versus specification on nonempty words; not an unsnapped-model certificate."
+}

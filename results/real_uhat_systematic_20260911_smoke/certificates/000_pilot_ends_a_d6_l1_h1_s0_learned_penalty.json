@@ -1,0 +1,26 @@
+{
+  "id": "000_pilot_ends_a_d6_l1_h1_s0_learned_penalty",
+  "task": "ends_a",
+  "study": "pilot",
+  "status": "inequivalent",
+  "seconds": 1.5438741890247911,
+  "timeout": 20,
+  "program_sha256": "856087c8cbea7a5fbdeed502932bb2891b4d5c24c1327fa7be65f53d577066d7",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "62ade3f2e9e15f5314f72bfe6aec846317bb36ebcfde1eef9e777b1c3eb99cdd",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/Users/alexander/work/llm_verification/target/scala-3.5.1/brasp-verification.jar",
+    "--equivalent",
+    "/Users/alexander/work/llm_verification/results/real_uhat_systematic_20260911_smoke/specs/ends_a.brasp",
+    "/Users/alexander/work/llm_verification/results/real_uhat_systematic_20260911_smoke/programs/000_pilot_ends_a_d6_l1_h1_s0_learned_penalty.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/Users/alexander/work/abc/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Extracted program versus specification on nonempty words; not an unsnapped-model certificate."
+}

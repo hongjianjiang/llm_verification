@@ -1,0 +1,24 @@
+{
+  "id": "202_gate_ends_ab_d6_l1_h1_s5_learned_penalty",
+  "task": "ends_ab",
+  "study": "gate",
+  "status": "nonempty",
+  "seconds": 1.0177720290084835,
+  "timeout": 120,
+  "program_sha256": "305475d074ce46df7a19b7ab27934e5082e12978ef28082aedb1f32388968507",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "b0dbc879ae4325dde5af7feb07625be12f88a1ad394a9317531da299692c8065",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/brasp-verification.jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/programs/202_gate_ends_ab_d6_l1_h1_s5_learned_penalty.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Independent emptiness check of the extracted program."
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "037_pilot_ends_ab_d6_l2_h1_s2_learned_penalty",
+    "word": "ab",
+    "spec_accepts": true,
+    "program_accepts": false
+  },
+  {
+    "id": "231_gate_repeat_final_d6_l1_h1_s2_fixed_zero",
+    "word": "ab",
+    "spec_accepts": false,
+    "program_accepts": true
+  },
+  {
+    "id": "064_pilot_subsequence_ab_d6_l1_h1_s4_learned_penalty",
+    "word": "aa",
+    "spec_accepts": false,
+    "program_accepts": true
+  }
+]

@@ -20,7 +20,7 @@ Two details carry the definition's fine print:
   smallest genuine score gap -- at random initialisation that bound was two
   positions. Instead `C` is implemented directly: leftmost takes the first
   maximal index, rightmost the last.
-* **`U_i = {} => c_i = 0`.** Under strict past masking that is exactly the
+* **`U_i = {} => attention_i = 0`.** Under strict past masking that is exactly the
   BOS position, which attends nowhere and contributes no attention term.
 
 Training uses a straight-through estimator: the forward pass takes the hard
@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-_NEG_INF = -1e9
+_NEG_INF = float("-inf")
 
 
 @dataclass
@@ -63,10 +63,9 @@ class RealAttentionHead(nn.Module):
         self.value = nn.Linear(width, width, bias=False)
         # Without position embeddings a score depends only on the *classes* of
         # i and j, so two positions holding the same symbol score identically
-        # and only `C` separates them. "Attend to the previous position" is
-        # therefore reachable only when every score ties -- a measure-zero
-        # configuration that gradient descent approaches but never attains.
-        # This gate makes it attainable: at `relu(gate) == 0` every score is
+        # and only `C` separates them. Tying every score is sufficient for
+        # rightmost attention to select the previous position. This gate
+        # makes that configuration attainable: at `relu(gate) == 0` every score is
         # exactly equal and the tie-break alone chooses, which is the head
         # that recognises `ends_ab`.
         self.gate = nn.Parameter(torch.ones(()))
@@ -92,11 +91,15 @@ class RealAttentionHead(nn.Module):
 
     def forward(self, x: torch.Tensor, beta: float, hard: bool) -> torch.Tensor:
         scores = self.scores(x)
-        soft = torch.softmax(beta * scores, dim=-1)
+        # BOS has no valid witnesses. Give its surrogate a finite row before
+        # softmax to avoid NaNs (including in backward), then zero its weights.
+        surrogate_scores = scores.clone()
+        surrogate_scores[:, 0, :] = 0
+        soft = torch.softmax(beta * surrogate_scores, dim=-1)
         if hard:
             index = self.chosen(scores)
             onehot = torch.zeros_like(soft).scatter_(-1, index, 1.0)
-            weights = onehot + soft - soft.detach()  # straight-through
+            weights = onehot + (soft - soft.detach())  # exactly hard forward
         else:
             weights = soft
 
@@ -148,9 +151,9 @@ class RealUhat(nn.Module):
 
         `snap_to` replaces each layer's output with its nearest class
         representative. Positions sharing a class then hold bitwise identical
-        vectors, so equal scores really are equal and index tie-breaking is
-        exact -- which is what lets the extracted program match this model
-        rather than merely approximate it.
+        vectors. This provides a numerical diagnostic alongside the ordinary
+        forward pass; snapping alone does not prove all-word agreement with
+        extraction, because floating-point kernels and batching can differ.
         """
         x = self.embedding(tokens.clamp(min=0))
         states = [x]

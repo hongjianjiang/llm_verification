@@ -1,0 +1,6 @@
+======== ABC command line "read_aiger /tmp/brasp-abc-9525919051879479784/model.aig; scleanup; dc2; pdr; print_status"
+Invariant F[1] : 0 clauses with 0 flops (out of 1) (cex = 0, ave = -nan)
+Verification of invariant with 0 clauses was successful.  Time =     0.00 sec
+Property proved.  Time =     0.02 sec
+Status = 1  Frames = 1   Cex is not defined.
+timing: compile 0.33s  encode 0.25s  abc 0.15s  total 0.73s

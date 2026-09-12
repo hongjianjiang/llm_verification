@@ -1,0 +1,7 @@
+alphabet a b
+is_a = symbol a
+is_b = symbol b
+is_bos = bos
+same = rightmost((is_a@i & is_a@j) | (is_b@i & is_b@j), true)
+accept = same
+output accept

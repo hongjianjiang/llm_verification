@@ -1121,3 +1121,20 @@ class TranslatorSuite extends munit.FunSuite:
     assertEquals(roundTrippedDepth, depth)
     assertEquals(roundTrippedLeaf, Formula.Constant(true))
   }
+
+  test("study full, support-only and realizable circuits preserve prefix semantics") {
+    for alphabet <- List(List("a", "b"), List("a", "b", "c")) do
+      val automaton = sampleAutomaton(alphabet)
+      val support = automaton.source.states.map(s => s -> automaton.gotoSupport).toMap
+      val full = automaton.copy(support = support,
+        supportIndex = support.view.mapValues(_.zipWithIndex.toMap).toMap)
+      val models = List(Aiger.generateSafety(automaton),
+        Aiger.generateSafety(automaton, reduceRealizable = false),
+        Aiger.generateSafety(full, reduceRealizable = false))
+      for length <- 1 to 4; word <- wordsOfLength(length, alphabet) do
+        val expected = (1 to length).map(k => BooleanAutomaton.accepts(automaton, word.take(k).toIndexedSeq)).toList
+        for model <- models do
+          assertEquals(runAiger(model, word.map(alphabet.indexOf).toIndexedSeq), expected)
+      if alphabet.length == 3 then
+        for model <- models do assert(runAiger(model, IndexedSeq(0, 3, 0)).forall(_ == false))
+  }

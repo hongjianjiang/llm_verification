@@ -1,0 +1,26 @@
+{
+  "id": "272_gate_since_a_d6_l1_h1_s3_fixed_one",
+  "task": "since_a",
+  "study": "gate",
+  "status": "equivalent",
+  "seconds": 0.8289932309999131,
+  "timeout": 120,
+  "program_sha256": "45ce06c7a5526e34b560ad63c81b7d82297e6425c65090382bc77ed850e3bc32",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "b0dbc879ae4325dde5af7feb07625be12f88a1ad394a9317531da299692c8065",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/brasp-verification.jar",
+    "--equivalent",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/specs/since_a.brasp",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/programs/272_gate_since_a_d6_l1_h1_s3_fixed_one.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Extracted program versus specification on nonempty words; not an unsnapped-model certificate."
+}

@@ -1,0 +1,7 @@
+alphabet a b
+is_a = symbol a
+is_b = symbol b
+is_bos = bos
+seen_b = rightmost(is_b@j, true)
+accept = is_a & !seen_b
+output accept

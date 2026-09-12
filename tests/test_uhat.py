@@ -185,13 +185,10 @@ class TomitaSpecTests(unittest.TestCase):
 
 
 class RealUhatExtractionTests(unittest.TestCase):
-    """The real-valued model's program must match it exactly, at any weights.
+    """Finite extraction consistency checks at random real-valued weights.
 
-    This is the harder direction than `uhat.extract`: there the model was
-    already Boolean, here real activations have to be shown to range over
-    finitely many classes and a real argmax has to become a Boolean cascade.
-    Checking it at random weights is what makes it a claim about the
-    construction rather than about wherever training happened to land.
+    These compare snapped execution and the emitted program on enumerated
+    short words; they are not an all-input floating-point equivalence proof.
     """
 
     def test_random_real_models_match_their_extraction(self):
@@ -227,9 +224,9 @@ class RealUhatExtractionTests(unittest.TestCase):
     def test_score_gate_makes_exact_ties_reachable(self):
         """At `relu(gate) == 0` every score ties, so `C` alone selects.
 
-        Without this the head cannot express "the previous position": scores
-        depend only on the classes of i and j, so equal symbols score equally
-        and only the tie-break separates them.
+        Zeroing the gate is sufficient for selecting the previous position;
+        it is not necessary, since nonzero score matrices can also tie on the
+        reachable activation classes.
         """
         import torch
 

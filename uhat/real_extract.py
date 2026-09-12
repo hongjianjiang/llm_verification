@@ -11,18 +11,17 @@ Layer 0 ranges over `|Sigma| + 1` embeddings. A layer-`l+1` activation is
 `ffn(c) + c` where `c = x_i + sum_h V_h x_{j_h}`, a function of the query's
 class and one witness class per head -- so `|V_{l+1}| <= |V_l| * (|V_l|+1)^H`,
 counting the "no witness" case that the BOS position takes. Closing over
-*all* such tuples over-approximates the reachable set, which is sound: the
-extracted program is correct on every word, and at worst carries classes that
-no word reaches.
+*all* such tuples over-approximates the reachable set in exact arithmetic.
+Floating-point execution can depend on batching and operation order; finite
+comparisons with ordinary and snapped execution are not an all-word proof.
 
 The other half is turning a real argmax into Boolean attention. Once
 activations range over finitely many classes, `f_S` is a finite table over
 class pairs. Sorting its distinct values descending gives score levels, and
 "attend to the best-scoring position" becomes a priority cascade: try level 1,
 then level 2, and so on, taking the rightmost (or leftmost) match at the first
-level that has one. That is exactly what `C` does, which is why the trained
-model folds tie-breaking into the score as `+/- eps * j` and the extracted
-program drops it in favour of the direction.
+level that has one. Both model and program break exact ties by index, without
+perturbing scores or merging nearby but distinct scores.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import torch
 from . import brasp
 from .real_model import RealUhat, RealUhatLayer
 
-_TOLERANCE = 1e-6
+_TOLERANCE = 0.0
 
 
 class ExtractionError(RuntimeError):
@@ -42,24 +41,24 @@ class ExtractionError(RuntimeError):
 
 
 def _dedupe(vectors: torch.Tensor, tolerance: float = _TOLERANCE) -> torch.Tensor:
-    """Distinct rows, up to `tolerance`."""
+    """Distinct rows; approximate merging requires an explicit absolute tolerance."""
     kept: list[torch.Tensor] = []
     for row in vectors:
-        if not any(torch.allclose(row, other, atol=tolerance) for other in kept):
+        if not any(torch.allclose(row, other, atol=tolerance, rtol=0) for other in kept):
             kept.append(row)
     return torch.stack(kept) if kept else vectors[:0]
 
 
 def _index_of(vector: torch.Tensor, table: torch.Tensor, tolerance: float = _TOLERANCE) -> int:
     for index, row in enumerate(table):
-        if torch.allclose(vector, row, atol=tolerance):
+        if torch.allclose(vector, row, atol=tolerance, rtol=0):
             return index
     raise ExtractionError("activation vector escaped the closed value set")
 
 
 @dataclass
 class LayerClasses:
-    """One layer's reachable activation values and how they are reached."""
+    """One layer's closed activation values (possibly unreachable) and transitions."""
 
     values: torch.Tensor
     """`(classes, width)`."""
@@ -70,10 +69,12 @@ class LayerClasses:
 def _apply_layer(
     layer: RealUhatLayer, query: torch.Tensor, witnesses: list[torch.Tensor | None]
 ) -> torch.Tensor:
-    total = query.clone()
+    # Match RealUhatLayer: sum head outputs first, then add the residual.
+    attended = torch.zeros_like(query)
     for head, witness in zip(layer.heads, witnesses):
         if witness is not None:
-            total = total + head.value(witness)
+            attended = attended + head.value(witness)
+    total = attended + query
     return layer.ffn(total) + total
 
 
@@ -116,8 +117,7 @@ def score_levels(
 ) -> list[list[list[int]]]:
     """Per query class, witness classes grouped by score, best first.
 
-    The `+/- eps * j` tie-break the model trains with is deliberately dropped:
-    within one group every witness scores identically, so the group's winner is
+    Within one group every witness scores identically, so the group's winner is
     whichever the head's direction selects, which is what `rightmost`/
     `leftmost` mean in B-RASP.
     """
@@ -127,8 +127,7 @@ def score_levels(
     for row in table:
         order: dict[float, list[int]] = {}
         for index, value in enumerate(row.tolist()):
-            key = next((k for k in order if abs(k - value) <= 1e-9), value)
-            order.setdefault(key, []).append(index)
+            order.setdefault(value, []).append(index)
         groups.append([order[k] for k in sorted(order, reverse=True)])
     return groups
 
@@ -161,7 +160,7 @@ def _class_match(prefix: str, index: int, width: int, at: str) -> brasp.Expr:
 
 
 def build_program(model: RealUhat, cap: int = 20000) -> brasp.Program:
-    """The B-RASP program a `RealUhat` computes.
+    """The B-RASP program of a `RealUhat`'s finite activation-table semantics.
 
     Classes are encoded in binary rather than one-hot: a head must publish
     *which* class it selected, and one attention op per (score level, class)

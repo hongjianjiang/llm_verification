@@ -1,0 +1,24 @@
+{
+  "id": "247_gate_repeat_final_d6_l1_h1_s6_fixed_zero",
+  "task": "repeat_final",
+  "study": "gate",
+  "status": "nonempty",
+  "seconds": 0.8273988479922991,
+  "timeout": 120,
+  "program_sha256": "6d3b3313b619cf5a19f5625615684d9c71a27f1cf05c9eeb2d90ba76738aeafa",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "b0dbc879ae4325dde5af7feb07625be12f88a1ad394a9317531da299692c8065",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/brasp-verification.jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/programs/247_gate_repeat_final_d6_l1_h1_s6_fixed_zero.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Independent emptiness check of the extracted program."
+}

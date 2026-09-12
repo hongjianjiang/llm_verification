@@ -92,13 +92,17 @@ object Aiger:
     * already a compile-time constant (`automaton.initial`'s own diagonal),
     * checked before ever calling the solver.
     */
-  def generateSafety(automaton: ReverseBooleanAutomaton): Array[Byte] =
+  def generateSafety(automaton: ReverseBooleanAutomaton, reduceRealizable: Boolean = true): Array[Byte] =
     if automaton.source.alphabet.isEmpty then throw AigerError("the AIGER backend requires a non-empty alphabet")
     // This backend still builds one explicit register per (state, local
     // abstraction) summary cell below — unlike `BooleanAutomaton`'s own
     // BDD-based `transition`/`diagonal`, which no longer need this check.
     try BooleanAutomaton.checkSupportSize(automaton)
     catch case PVWAAError(message) => throw AigerError(message)
+    if !reduceRealizable then
+      val cells = automaton.source.states.map(s => BigInt(2).pow(automaton.support(s).length)).sum
+      if cells * automaton.source.alphabet.length > 500_000 then
+        throw AigerError(s"unreduced study encoding exceeds 500000 cell-symbol evaluations: $cells cells")
     val b = Builder()
     val states = automaton.source.states
     val stateIndex = states.zipWithIndex.toMap
@@ -114,7 +118,12 @@ object Aiger:
     // wasted work for states with a sizeable local support.
     val abstractionsCache = mutable.Map.empty[String, Vector[Vector[Boolean]]]
     def abstractionsOf(state: String): Vector[Vector[Boolean]] =
-      abstractionsCache.getOrElseUpdate(state, BooleanAutomaton.realizableAbstractions(automaton, state))
+      abstractionsCache.getOrElseUpdate(state,
+        if reduceRealizable then BooleanAutomaton.realizableAbstractions(automaton, state)
+        else
+          val width = automaton.support(state).length
+          Vector.tabulate(1 << width)(mask => Vector.tabulate(width)(bit => ((mask >> bit) & 1) != 0))
+      )
     val alphabet = automaton.source.alphabet
     val alphabetSize = alphabet.length
     val ordered = states.sortBy(state => (automaton.source.rank(state), state))

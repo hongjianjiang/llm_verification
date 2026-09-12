@@ -1,0 +1,24 @@
+{
+  "id": "054_pilot_ends_ab_d12_l2_h1_s4_learned_penalty",
+  "task": "ends_ab",
+  "study": "pilot",
+  "status": "nonempty",
+  "seconds": 3.2217263640195597,
+  "timeout": 120,
+  "program_sha256": "5aa36190b4e66a3d1c8ed8947650b28438b4bd33985a41bf6a001af76448718e",
+  "jar_sha256": "cd2817d1dd3a1dc3c85cd7718a221a1fc52ffb63a7d17247f1409a0a8c8f051b",
+  "abc_sha256": "b0dbc879ae4325dde5af7feb07625be12f88a1ad394a9317531da299692c8065",
+  "command": [
+    "java",
+    "-Xmx4g",
+    "-jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/brasp-verification.jar",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/results/real_uhat_systematic_20260911/programs/054_pilot_ends_ab_d12_l2_h1_s4_learned_penalty.brasp",
+    "--run-abc",
+    "--abc-bin",
+    "/home/hongjian/llm_verification/experiments/real_uhat_20260911/bin/abc",
+    "--abc-raw",
+    "--timing"
+  ],
+  "scope": "Independent emptiness check of the extracted program."
+}

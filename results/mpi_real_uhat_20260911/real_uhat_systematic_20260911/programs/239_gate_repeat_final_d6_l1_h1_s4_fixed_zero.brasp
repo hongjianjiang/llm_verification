@@ -1,0 +1,21 @@
+alphabet a b
+
+is_bos = bos
+is_a = symbol a
+is_b = symbol b
+L0_b0 = is_a
+L0_b1 = is_b
+L0h0_hit0 = rightmost(!L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | !L0_b0@i & L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j), true)
+L0h0_lvl0_b0 = rightmost(!L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | !L0_b0@i & L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j), L0_b0@j)
+L0h0_lvl0_b1 = rightmost(!L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | L0_b0@i & !L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j) | !L0_b0@i & L0_b1@i & (!L0_b0@j & !L0_b1@j | L0_b0@j & !L0_b1@j | !L0_b0@j & L0_b1@j), L0_b1@j)
+L0h0_first0 = L0h0_hit0
+L0h0_b0 = L0h0_first0 & L0h0_lvl0_b0
+L0h0_b1 = L0h0_first0 & L0h0_lvl0_b1
+L0h0_none = !L0h0_hit0
+L1_b0 = L0_b0 & !L0_b1 & L0h0_none | !L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & !L0h0_b1 | !L0_b0 & L0_b1 & !L0h0_none & !L0h0_b0 & !L0h0_b1 | L0_b0 & !L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1 | !L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1 | !L0_b0 & L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1
+L1_b1 = !L0_b0 & L0_b1 & L0h0_none | !L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & !L0h0_b1 | !L0_b0 & !L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1 | L0_b0 & !L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1 | L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1 | !L0_b0 & L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1
+L1_b2 = L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & !L0h0_b1 | !L0_b0 & L0_b1 & !L0h0_none & !L0h0_b0 & !L0h0_b1 | !L0_b0 & !L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1 | L0_b0 & !L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1
+L1_b3 = !L0_b0 & L0_b1 & !L0h0_none & L0h0_b0 & !L0h0_b1 | !L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1 | L0_b0 & !L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1 | !L0_b0 & L0_b1 & !L0h0_none & !L0h0_b0 & L0h0_b1
+accept = L1_b0 & !L1_b1 & !L1_b2 & !L1_b3 | !L1_b0 & L1_b1 & !L1_b2 & !L1_b3 | !L1_b0 & L1_b1 & L1_b2 & !L1_b3 | L1_b0 & L1_b1 & L1_b2 & !L1_b3 | L1_b0 & !L1_b1 & !L1_b2 & L1_b3 | L1_b0 & L1_b1 & !L1_b2 & L1_b3
+
+output accept

@@ -1,0 +1,4 @@
+======== ABC command line "read_aiger /tmp/brasp-abc-14170951662947906505/model.aig; scleanup; dc2; pdr; print_status"
+Output 0 of miter "/tmp/brasp-abc-14170951662947906505/model" was asserted in frame 2.  Time =     0.02 sec
+Status = 0  Frames = 1   CEX: Po =   0  Frame =   2  FF = 3  PI = 1  Bit =       6  1s =       1 (33.33 %)
+timing: compile 0.40s  encode 0.39s  abc 0.16s  total 0.95s
