@@ -1,0 +1,10 @@
+logic past-strict
+alphabet marker a b
+
+f_0 := sym(a)@i
+f_1 := sym(b)@i
+f_2 := sym(marker)@i
+f_3 := (!((!((f_0@i & f_0@j)) & !((f_1@i & f_1@j))))) S (f_2@j)
+
+output := f_3@i
+evaluate at i = |w| (the final input position)

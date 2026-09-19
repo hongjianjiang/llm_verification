@@ -1,0 +1,13 @@
+dot_depth__k-3200__sigma-2.ltl
+y_depth__k-20.ltl
+y_depth__k-100.ltl
+y_depth__k-500.ltl
+y_depth__k-8000.ltl
+y_depth__no_two_a__k-24.ltl
+y_depth__no_two_a__k-1000.ltl
+y_depth__no_two_a__k-4000.ltl
+y_depth__no_two_a__k-64000.ltl
+two_var__since_same_letter__sigma-12.ltl
+two_var__same_letter_before__sigma-12.ltl
+marks__k-2400.brasp
+same__k-1200.brasp

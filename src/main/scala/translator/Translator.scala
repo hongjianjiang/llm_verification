@@ -31,6 +31,7 @@ final case class CliArgs(
     timing: Boolean = false,
     json: Boolean = false,
     ltl: Boolean = false,
+    ltlf: Boolean = false,
     dot: Boolean = false,
     brasp: Boolean = false,
     word: Option[String] = None,
@@ -76,6 +77,7 @@ object Translator:
     var timing = false
     var jsonOut = false
     var ltlOut = false
+    var ltlfOut = false
     var dotOut = false
     var braspOut = false
     var word: Option[String] = None
@@ -109,6 +111,7 @@ object Translator:
         case "--timing"             => timing = true
         case "--json"               => jsonOut = true
         case "--ltl"                 => ltlOut = true
+        case "--ltlf"                => ltlfOut = true
         case "--dot"                 => dotOut = true
         case "--brasp"                => braspOut = true
         case "--word"                => word = Some(takeValue("--word", it))
@@ -138,6 +141,7 @@ object Translator:
       timing = timing,
       json = jsonOut,
       ltl = ltlOut,
+      ltlf = ltlfOut,
       dot = dotOut,
       brasp = braspOut,
       word = word,
@@ -422,8 +426,8 @@ object Translator:
           CompileResult.BooleanResult(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(toFuture(compiled0))))
         else if parsed.pvwaa then
           CompileResult.PvwaaResult(Pvwaa.fromFuture2ltl(toFuture(compiled0)))
-        else if parsed.future then
-          CompileResult.Dag(mirrorToFuture(compiled0))
+        else if parsed.future || parsed.ltlf then
+          CompileResult.Dag(toFuture(compiled0))
         else
           CompileResult.Dag(compiled0)
       catch
@@ -564,7 +568,15 @@ object Translator:
             case None       => ()
           println(if parsed.json then Json.render(Pvwaa.toJson(automaton)) else Pvwaa.render(automaton))
       case CompileResult.Dag(dag) =>
-        if parsed.brasp then
+        if parsed.ltlf then
+          // One line on stdout and no saved artifact: this output exists to be
+          // piped straight into an LTLf satisfiability checker.
+          try println(LtlfExport.render(dag))
+          catch
+            case LtlfExportError(message) =>
+              System.err.println(s"translator: $message")
+              return 2
+        else if parsed.brasp then
           try
             val rendered = BraspText.render(LtlToBrasp.translate(dag))
             trySaveArtifact(braspOutputPath(parsed.input), rendered) match

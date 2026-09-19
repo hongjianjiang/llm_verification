@@ -1,0 +1,16 @@
+alphabet a m
+
+is_m = symbol m
+h_1 = is_m
+p_2 = rightmost(is_m@j, h_1@j)
+h_2 = is_m & p_2
+p_3 = rightmost(is_m@j, h_2@j)
+h_3 = is_m & p_3
+p_4 = rightmost(is_m@j, h_3@j)
+h_4 = is_m & p_4
+p_5 = rightmost(is_m@j, h_4@j)
+h_5 = is_m & p_5
+seen_5 = rightmost(h_5@j, true)
+accept = h_5 | seen_5
+
+output accept

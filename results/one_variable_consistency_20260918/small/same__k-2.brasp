@@ -1,0 +1,14 @@
+alphabet a b m
+
+is_m = symbol m
+is_a = symbol a
+is_b = symbol b
+prev_a = rightmost(true, is_a@j)
+prev_b = rightmost(true, is_b@j)
+prev_m = rightmost(true, is_m@j)
+h_1 = is_m
+p_2 = rightmost(is_m@j, h_1@j)
+h_2 = is_m & p_2
+accept = rightmost(h_2@j, is_a@i & prev_a@j | is_b@i & prev_b@j | is_m@i & prev_m@j)
+
+output accept

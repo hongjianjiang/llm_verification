@@ -1,0 +1,8 @@
+logic future-strict
+alphabet a b
+
+f_0 := sym(a)@i
+f_1 := sym(b)@i
+
+output := ((!(sym(a)@i) & !(sym(b)@i) & F(!((!((false & f_0@j)) & !((false & f_1@j)))))) | (sym(a)@i & !(sym(b)@i) & F(!((!((true & f_0@j)) & !((false & f_1@j)))))) | (!(sym(a)@i) & sym(b)@i & F(!((!((false & f_0@j)) & !((true & f_1@j)))))) | (sym(a)@i & sym(b)@i & F(!((!((true & f_0@j)) & !((true & f_1@j)))))))
+evaluate at i = 0 on reverse(w); symbols occupy 0..|w|-1 and EOS is |w|

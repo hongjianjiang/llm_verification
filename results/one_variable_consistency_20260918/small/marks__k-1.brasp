@@ -1,0 +1,8 @@
+alphabet a m
+
+is_m = symbol m
+h_1 = is_m
+seen_1 = rightmost(h_1@j, true)
+accept = h_1 | seen_1
+
+output accept

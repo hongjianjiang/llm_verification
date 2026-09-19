@@ -1,0 +1,16 @@
+logic past-strict
+alphabet marker a b c d e f g h
+
+f_0 := sym(a)@i
+f_1 := sym(b)@i
+f_2 := sym(c)@i
+f_3 := sym(d)@i
+f_4 := sym(e)@i
+f_5 := sym(f)@i
+f_6 := sym(g)@i
+f_7 := sym(h)@i
+f_8 := sym(marker)@i
+f_9 := (!((((((((!((f_0@i & f_0@j)) & !((f_1@i & f_1@j))) & !((f_2@i & f_2@j))) & !((f_3@i & f_3@j))) & !((f_4@i & f_4@j))) & !((f_5@i & f_5@j))) & !((f_6@i & f_6@j))) & !((f_7@i & f_7@j))))) S (f_8@j)
+
+output := f_9@i
+evaluate at i = |w| (the final input position)
