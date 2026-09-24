@@ -33,7 +33,7 @@ final case class AigerError(message: String) extends RuntimeException(message)
 
 object Aiger:
 
-  private final class Builder:
+  private[brasp] final class Builder:
     private var nextVar = 1
     val andGates = mutable.ArrayBuffer.empty[(Int, Int, Int)] // (outputLit, aLit, bLit)
     // Structural hashing.
@@ -79,7 +79,7 @@ object Aiger:
     * `Io_ReadAigerDecode` in ABC's `ioReadAiger.c`): little-endian, 7 bits
     * per byte, high bit set while more bytes follow.
     */
-  private def encodeDelta(out: ByteArrayOutputStream, valueIn: Int): Unit =
+  private[brasp] def encodeDelta(out: ByteArrayOutputStream, valueIn: Int): Unit =
     var value = valueIn
     while (value & ~0x7f) != 0 do
       out.write((value & 0x7f) | 0x80)

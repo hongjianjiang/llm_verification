@@ -73,26 +73,69 @@ def measure(args: argparse.Namespace, input_path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("inputs", type=Path, nargs="+", help=".ltl or .brasp instances to measure")
+    parser.add_argument("inputs", type=Path, nargs="*", help=".ltl or .brasp instances to measure")
+    parser.add_argument("--manifest", type=Path, help="TSV: task, input name, path")
     parser.add_argument("--jar", type=Path, default=Path("target/scala-3.5.1/brasp-verification.jar"))
     parser.add_argument("--abc", type=Path, default=Path("../abc/abc"))
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--heap", default="4g")
     parser.add_argument("--out", type=Path, help="write one JSON record per instance here")
+    parser.add_argument("--reference", type=Path, help="JSONL expected classifications")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--skip-after-failure", action="store_true",
+                        help="manifest only: skip larger family cases after timeout/size limit")
     args = parser.parse_args()
     args.jar = args.jar.resolve()
     args.abc = args.abc.resolve()
+    if not args.jar.is_file() or not args.abc.is_file():
+        parser.error("jar and ABC executable must exist")
+    entries = [(path.stem, path) for path in args.inputs]
+    if args.manifest:
+        entries += [(row[0], Path(row[2])) for line in args.manifest.read_text().splitlines()
+                    if line.strip() for row in [line.split("\t")]]
+    if not entries:
+        parser.error("provide inputs or --manifest")
+    reference = {}
+    if args.reference:
+        reference = {row["input"]: row["status"] for line in args.reference.read_text().splitlines()
+                     if line.strip() for row in [json.loads(line)]}
+    previous = {}
+    if args.resume and args.out and args.out.exists():
+        previous = {row["input"]: row for line in args.out.read_text().splitlines()
+                    if line.strip() for row in [json.loads(line)]}
 
-    records = []
-    for input_path in args.inputs:
-        record = measure(args, input_path)
+    records, failed = [], {}
+    for task, input_path in entries:
+        family = task.split("__")[0]
+        digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
+        if input_path.name in previous:
+            record = previous[input_path.name]
+            if record.get("sha256") != digest or record.get("timeout_seconds") != args.timeout:
+                parser.error(f"resume configuration/input mismatch for {input_path}")
+        elif args.skip_after_failure and args.manifest and family in failed:
+            record = dict(input=input_path.name, sha256=digest, timeout_seconds=args.timeout,
+                          status="skipped", reason=failed[family])
+        else:
+            record = measure(args, input_path)
+        record["task"] = task
+        record["solver"] = "abc-ltl-circuit"
+        if record["status"] in {"timeout", "size_limit"}:
+            failed[family] = input_path.name + ": " + record["status"]
+        if input_path.name in reference and record["status"] in {"empty", "nonempty"}:
+            record["matches_reference"] = record["status"] == reference[input_path.name]
         records.append(record)
         print(json.dumps(record), flush=True)
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)
-            args.out.write_text("".join(json.dumps(r) + "\n" for r in records))
-    return 0
+            checkpoint = args.out.with_suffix(args.out.suffix + ".tmp")
+            checkpoint.write_text("".join(json.dumps(r) + "\n" for r in records))
+            checkpoint.replace(args.out)
+        if record.get("matches_reference") is False:
+            print(f"reference mismatch on {input_path}; stopping", file=sys.stderr)
+            return 1
+    return int(any(r.get("matches_reference") is False or r["status"] in {"error", "unknown"}
+                   for r in records))
 
 
 if __name__ == "__main__":

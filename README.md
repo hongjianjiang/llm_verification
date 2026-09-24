@@ -170,6 +170,57 @@ elimination when requested. ABC adds `encode` and `abc`; the native route
 adds `explore`. `total` sums these phases and excludes JVM startup, while
 the batch runners' `wall_s` measures the whole invocation.
 
+## NuSMV comparison baseline (Figure 3)
+
+`scripts/nusmv_baseline.py` reuses `--one-variable --ltlf`: 2LTL variable
+elimination and mirroring produce future LTLf, then a finite-prefix encoding
+produces an ordinary infinite-trace LTL specification in an SMV model.
+The prefix includes the export's final symbol-free sentinel. A fresh `active`
+state bit starts true and cannot restart after becoming false; the
+counterexample condition requires it eventually to become false. Strong/weak next,
+until/release, and eventually/always are relativized to this prefix. Thus
+NuSMV finding a counterexample means the original language is **nonempty**.
+Symbol propositions are renamed to avoid SMV keyword collisions.
+
+Two NuSMV engines are available:
+
+- `--engine bdd`: complete symbolic LTL checking (`go; check_ltlspec`). A true
+  specification proves emptiness.
+- `--engine bmc`: incremental SAT-based bounded checking
+  (`go_bmc; check_ltlspec_bmc_inc -k N`). A counterexample proves nonemptiness;
+  exhausting `--bound` is recorded as `bound_limit`, never as emptiness.
+
+NuSMV builds the symbolic model / Boolean expression representation itself;
+this baseline does not pass through our conditional-summary circuit or ABC.
+See the [NuSMV manual](https://nusmv.fbk.eu/userman/v27/nusmv.pdf) and
+[official downloads](https://nusmv.fbk.eu/downloads.html).
+
+```sh
+python3 scripts/nusmv_baseline.py examples/ltl/y_depth__k-10.ltl \
+  --nusmv /path/to/NuSMV --engine bdd --out results/nusmv_smoke/records.jsonl
+
+# All 77 instances currently plotted in Figure 3, including the later additions.
+# Two concurrent engines, 900 s end-to-end, 4 GB Java heap each, one repetition.
+# Larger family instances are explicitly skipped after timeout/size-limit failures.
+python3 scripts/run_nusmv_figure3.py --nusmv /path/to/NuSMV --repetitions 1 --jobs 2
+MPLBACKEND=Agg python3 scripts/plot_nusmv_figure3.py results/nusmv_figure3_20260923
+
+# Resume interrupted runs; hashes/settings must match.
+python3 scripts/run_nusmv_figure3.py --nusmv /path/to/NuSMV --repetitions 1 --jobs 2 --resume
+
+# Real-solver semantic tests, including every Boolean trace of length 1..3.
+NUSMV_BIN=/absolute/path/to/NuSMV python3 -m pytest tests/test_nusmv_baseline.py
+```
+
+The BMC experiment uses a maximum bound of 10,000 transitions. Successful
+timings include JVM startup, variable elimination, SMV encoding, and NuSMV.
+Terminal failures are not repeated. The result directory contains a manifest,
+machine/tool metadata, per-repetition timing samples, formulas, SMV models,
+counterexample words (reversed back to source order), and logs. Reference
+verdicts are checked for every conclusive result. The comparison plot and
+table retain skipped and bound-limited outcomes explicitly. Existing Aalta,
+Lisa, and circuit curves reuse their recorded measurements.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

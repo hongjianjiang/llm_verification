@@ -150,6 +150,22 @@ class TaskTests(unittest.TestCase):
         self.assertFalse(TASKS["parity_a"].star_free)
 
 
+class Figure2TrainingStudyTests(unittest.TestCase):
+    """Scaled Figure 2 specs must match their balanced training tasks."""
+
+    def test_generated_specs_match_independent_predicates(self):
+        from scripts.uhat_figure2_study import _validate, specifications
+
+        rows = specifications()
+        self.assertEqual(len(rows), 26)
+        for family, axis, parameter, text in rows:
+            name = f"figure2_{family}__{axis}-{parameter}"
+            with self.subTest(name=name):
+                facts = _validate(name, text)
+                self.assertGreaterEqual(facts["test_positive_rate"], 0.2)
+                self.assertLessEqual(facts["test_positive_rate"], 0.8)
+
+
 class TomitaSpecTests(unittest.TestCase):
     """The hand-written specs must be the Tomita languages, not near-misses.
 

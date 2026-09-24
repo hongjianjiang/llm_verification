@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -p cpu20
+#SBATCH -p cpu
 #SBATCH -c 2
 #SBATCH --mem=4G
 #SBATCH -t 04:00:00
@@ -36,7 +36,8 @@ GRID="${1:-${GRID:-results/uhat_sweep/grid.txt}}"
 # Second positional arg, for the same reason as the grid: this cluster's
 # sbatch rejects --export.
 OUTDIR="${2:-${OUTDIR:-results/uhat_sweep}}"
-STEPS="${STEPS:-1500}"
+# Third positional arg, for the same reason again.
+STEPS="${3:-${STEPS:-1500}}"
 RESTARTS="${RESTARTS:-3}"
 BATCH="${BATCH:-0}"   # 0 = full batch; set e.g. 512 for the long-word dot_depth cells
 # Training coverage: enumerate every word up to this length into the training

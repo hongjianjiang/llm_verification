@@ -49,8 +49,8 @@ def run(a):
     path=(a.out/'inputs'/c['input']).resolve();jar=str(a.jar.resolve());abc=str(a.abc.resolve())
     dest=a.out/'records';dest.mkdir(exist_ok=True);logs=a.out/'logs';logs.mkdir(exist_ok=True)
     rng=random.Random(20260911+a.cell)
-    for rep in range(3):
-        routes=['dfa','full','support','realizable'];rng.shuffle(routes)
+    for rep in range(a.repetitions):
+        routes=list(a.routes);rng.shuffle(routes)
         for route in routes:
             row=dict(c,route=route,repetition=rep,timeout=a.timeout,host=os.uname().nodename,jar_sha256=hashlib.sha256(a.jar.read_bytes()).hexdigest())
             start=time.monotonic()
@@ -72,11 +72,15 @@ def run(a):
                 else:status='unknown'
                 row.update(status=status,wall_seconds=time.monotonic()-start,command=args)
                 if status in ('empty','nonempty'):row['matches_expected']=status==c['expected']
-                row['structural_metrics']={k:v for k,v in re.findall(r'(states|goto|max_support|full_cells|support_cells|realizable_cells|compile_seconds|encode_seconds)=([^\s]+)',raw)}
+                row['structural_metrics']={k:v for k,v in re.findall(r'(states|rows|goto|max_support|full_cells|support_cells|realizable_cells|compile_seconds|encode_seconds|compile_encode_seconds|frontend_seconds|elimination_seconds|circuit_seconds)=([^\s]+)',raw)}
+                header=re.search(r'header=aig (\d+) (\d+) (\d+) (\d+) (\d+)',raw)
+                if header: row['aig'] = dict(zip(['variables','inputs','latches','outputs','ands'],map(int,header.groups())))
                 (logs/f'{a.cell}_{rep}_{route}.txt').write_text(raw)
             rows.append(row);(dest/f'{a.cell}.json').write_text(json.dumps(rows,indent=2)+'\n');print(a.cell,rep,route,status,flush=True)
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('command',choices=['plan','run']);p.add_argument('--out',type=Path,required=True);p.add_argument('--cell',type=int,default=0);p.add_argument('--jar',type=Path);p.add_argument('--abc',type=Path);p.add_argument('--timeout',type=int,default=120)
+    p.add_argument('--routes',nargs='+',default=['dfa','full','support','realizable'],choices=['dfa','full','support','realizable','one-variable','one-variable-shared','one-variable-realizable','direct-support','direct-realizable'])
+    p.add_argument('--repetitions',type=int,default=3)
     a=p.parse_args();plan(a.out) if a.command=='plan' else run(a)
 if __name__=='__main__':main()

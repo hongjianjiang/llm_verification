@@ -182,11 +182,23 @@ def verify(args: argparse.Namespace, input_path: Path, record: dict) -> dict:
         ["java", f"-Xmx{args.heap}", "-jar", str(args.jar), str(input_path), "--boolean-automaton", "--word", word],
         args.timeout,
     )
+    if code != 0 and code != -999:
+        # The Boolean-automaton route rejects some formula shapes outright (e.g. an
+        # inline temporal operator inside a Boolean definition); a translation error
+        # is not a rejected witness, so fall back to the reference evaluator.
+        code, _, output = run_command(
+            ["java", f"-Xmx{args.heap}", "-Xss512m", "-jar", str(args.jar), str(input_path), "--word", word],
+            args.timeout,
+        )
+        record["witness_replay"] = "reference evaluator"
     if code == -999:
         record["witness_accepted"] = None
         record["witness_replay"] = "timeout"
+    elif code != 0:
+        record["witness_accepted"] = None
+        record["witness_replay"] = "error: " + " ".join(output.strip().splitlines()[-1:])
     else:
-        record["witness_accepted"] = code == 0 and output.strip().endswith("true")
+        record["witness_accepted"] = output.strip().endswith("true")
     return record
 
 

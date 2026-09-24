@@ -81,6 +81,10 @@ class Schedule:
     """Pressure toward one-hot gates, so the soft and hard phases agree."""
     lr: float = 0.05
     hard_lr: float = 0.01
+    hard_loss: str = "surrogate"
+    """Hard-phase gradient: 'surrogate' (hard forward, soft backward),
+    'straight_through' (differentiate the hard model), or 'legacy' (clamped BCE,
+    which has zero gradient on a 0/1 output, so the hard phase never moves)."""
     binarisation_weight: float = 0.0
     """Pressure on derived features toward 0/1.  Off by default, and measured:
 

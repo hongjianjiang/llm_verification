@@ -35,6 +35,7 @@ final case class CliArgs(
     dot: Boolean = false,
     brasp: Boolean = false,
     word: Option[String] = None,
+    words: Option[File] = None,
 )
 
 enum CompileResult:
@@ -81,6 +82,7 @@ object Translator:
     var dotOut = false
     var braspOut = false
     var word: Option[String] = None
+    var words: Option[File] = None
 
     def fail(message: String): Nothing = throw CliParseError(message)
     def takeValue(flag: String, it: Iterator[String]): String =
@@ -115,6 +117,7 @@ object Translator:
         case "--dot"                 => dotOut = true
         case "--brasp"                => braspOut = true
         case "--word"                => word = Some(takeValue("--word", it))
+        case "--words"               => words = Some(File(takeValue("--words", it)))
         case other if other.startsWith("-") && other != "-" => fail(s"unrecognized arguments: $other")
         case other =>
           if input.isDefined then fail(s"unrecognized arguments: $other")
@@ -145,6 +148,7 @@ object Translator:
       dot = dotOut,
       brasp = braspOut,
       word = word,
+      words = words,
     )
 
   private def readFile(file: File): String =
@@ -451,16 +455,25 @@ object Translator:
           return 2
     Phases.compileNs = System.nanoTime() - compileStart
 
-    if parsed.word.isDefined then
+    if parsed.word.isDefined || parsed.words.isDefined then
       try
-        val word = splitWord(parsed.word.get, alphabetOf(compiled))
-        val accepted = compiled match
-          case CompileResult.BooleanResult(automaton) => BooleanAutomaton.accepts(automaton, word)
-          // the PVWAA accepts reverse(w); --word always answers about w itself.
-          case CompileResult.PvwaaResult(automaton) => Pvwaa.accepts(automaton, word.reverse)
-          case CompileResult.Dag(dag) =>
-            Ltl.evaluate(dag, if dag.logic == Logic.FutureStrict then word.reverse else word)
-        println(accepted)
+        def accepts(text: String): Boolean =
+          val word = splitWord(text, alphabetOf(compiled))
+          compiled match
+            case CompileResult.BooleanResult(automaton) => BooleanAutomaton.accepts(automaton, word)
+            // the PVWAA accepts reverse(w); --word always answers about w itself.
+            case CompileResult.PvwaaResult(automaton) => Pvwaa.accepts(automaton, word.reverse)
+            case CompileResult.Dag(dag) =>
+              Ltl.evaluate(dag, if dag.logic == Logic.FutureStrict then word.reverse else word)
+        // `--words FILE`: one word per line (an empty line is the empty
+        // word), one answer per line, so a batch costs one JVM start.
+        val texts = parsed.words match
+          case Some(file) =>
+            val body = readFile(file)
+            if body.isEmpty then Nil
+            else body.stripSuffix("\n").split("\n", -1).toList
+          case None       => List(parsed.word.get)
+        texts.foreach(text => println(accepts(text)))
         return 0
       catch
         case PVWAAError(message) =>

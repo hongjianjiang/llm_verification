@@ -1,0 +1,43 @@
+--- a/src/lisa.cc
++++ b/src/lisa.cc
+@@ -643,6 +643,12 @@
+     	pair._twa = minimize_explicit(pair._twa);
+     }
+     cout << "Final result (or number of nodes): " << pair._num_states << endl;
++    // local patch: report language emptiness of the constructed DFA
++    {
++        dfwa* check = pair._is_explicit ? symbolize_twa(dict, pair._twa) : pair._dfa;
++        cout << "Emptiness: " << (check->is_empty() ? "EMPTY" : "NONEMPTY") << endl;
++        if (pair._is_explicit) delete check;
++    }
+     if(! pair._is_explicit && ! opt->_synthesis)
+     {
+     	if(opt->_minimization)
+--- a/src/spotutil.cc
++++ b/src/spotutil.cc
+@@ -235,7 +235,8 @@
+ 	{
+ 		for (auto& e: A->out(s))
+ 		{
+-			if((e.cond & !p2) != bddfalse && s != e.dst)
++			// local patch: a merged end-of-trace sink is final too
++			if((e.cond & !p2) != bddfalse)
+ 			{
+ 				finals.insert(s);
+ 			}
+--- a/src/mona.cc
++++ b/src/mona.cc
+@@ -324,11 +324,9 @@
+     */
+     string mona_file_name = "./ltlf.mona";
+     ofstream ofs(mona_file_name, ofstream::out);
+-    ofs << "#LTLf formula" << endl;
+-    ofs << "#" << str_psl(f, true) << endl;
++    // local patch: the formula used to be echoed here as MONA comments; a
++    // long one overflows MONA's YYLMAX and MONA aborts without a DFA.
+     formula bnf = get_bnf(f);
+-    ofs << "# Backus normal form" << endl;
+-    ofs << "#" << str_psl(bnf, true) << endl;
+     // the BNF form, and then convert it to fol formula
+     ltlf_to_fol(ofs, bnf);
+     ofs.close();

@@ -1138,3 +1138,114 @@ class TranslatorSuite extends munit.FunSuite:
       if alphabet.length == 3 then
         for model <- models do assert(runAiger(model, IndexedSeq(0, 3, 0)).forall(_ == false))
   }
+
+  test("direct summary circuits agree with formula and PVWAA on random DAGs") {
+    import Formula.*
+    val rng = new scala.util.Random(7419)
+    for trial <- 0 until 40 do
+      val alphabet = if trial % 2 == 0 then List("a", "b") else List("a", "b", "c")
+      var defs = VectorMap[String, Formula]("a" -> Atom(AtomKind.SymbolAtom, Position.I, Some("a")),
+        "bos" -> Atom(AtomKind.BosAtom, Position.I, None))
+      def predicate(depth: Int): Formula =
+        if depth == 0 then
+          if rng.nextInt(4) == 0 then Constant(rng.nextBoolean())
+          else Reference(defs.keys.toVector(rng.nextInt(defs.size)), if rng.nextBoolean() then Position.I else Position.J)
+        else rng.nextInt(3) match
+          case 0 => Negation(predicate(depth - 1))
+          case 1 => Conjunction(List(predicate(depth - 1), predicate(depth - 1)))
+          case _ => Disjunction(List(predicate(depth - 1), predicate(depth - 1)))
+      for n <- 0 until 4 do
+        val p = predicate(2)
+        val t = rng.nextInt(4) match
+          case 0 => Previous(Position.I, Position.J, p)
+          case 1 => Once(Position.I, Position.J, p)
+          case 2 => Historically(Position.I, Position.J, p)
+          case _ => Since(Position.I, Position.J, p, predicate(2))
+        defs = defs.updated(s"t$n", if rng.nextBoolean() then Negation(t) else t)
+      val dag = FormulaDag(Logic.PastStrict, defs, Reference("t3", Position.I), "final", alphabet = Some(alphabet))
+      val pv = Aiger.generateSafety(BooleanAutomaton.fromForwardPvwaa(Pvwaa.fromFuture2ltl(Ltl.mirrorDag(dag))))
+      val ltlModels = List(false, true).map { reduced =>
+        val translated = SharedOneVariableLtl.translate(dag, reduced)
+        val compiled = DirectSummary.generate(translated.dag, false)
+        assertEquals(compiled.maxSupport, 0)
+        compiled.model
+      }
+      val models = List(pv, DirectSummary.generate(dag, false).model, DirectSummary.generate(dag).model) ++ ltlModels
+      for n <- 1 to 4; w <- wordsOfLength(n, alphabet) do
+        val expected = (1 to n).map(k => Ltl.evaluate(dag, w.take(k).toIndexedSeq)).toList
+        models.foreach(m => assertEquals(runAiger(m, w.map(alphabet.indexOf).toIndexedSeq), expected, s"trial=$trial word=$w"))
+  }
+
+  test("direct boundary, inline atoms, constants, invalid symbols and shared temporal subformulas") {
+    import Formula.*
+    val alphabet = List("00", "10", "11")
+    val a = Atom(AtomKind.BitAtom, Position.J, Some("0"))
+    val h = Historically(Position.I, Position.J, a)
+    val formulas = List(Constant(true), Constant(false), h, Negation(h),
+      Previous(Position.I, Position.J, Atom(AtomKind.BosAtom, Position.J, None)),
+      Once(Position.I, Position.J, Conjunction(List(Atom(AtomKind.BitAtom, Position.I, Some("0")), a))),
+      Disjunction(List(h, Negation(h))))
+    for f <- formulas do
+      val dag = FormulaDag(Logic.PastStrict, VectorMap.empty, f, "final", alphabet = Some(alphabet))
+      for reduced <- List(false, true) do
+        val translated = SharedOneVariableLtl.translate(dag, reduced)
+        val compiled = DirectSummary.generate(translated.dag, false)
+        assertEquals(compiled.maxSupport, 0)
+        for model <- List(compiled.model, DirectSummary.generate(dag, reduced).model) do
+          for n <- 1 to 4; w <- wordsOfLength(n, alphabet) do
+            val expected = (1 to n).map(k => Ltl.evaluate(dag, w.take(k).toIndexedSeq)).toList
+            assertEquals(runAiger(model, w.map(alphabet.indexOf).toIndexedSeq), expected)
+            assertEquals(Ltl.evaluate(translated.dag, w.toIndexedSeq), expected.last)
+          assert(runAiger(model, IndexedSeq(3, 0, 1)).forall(!_))
+  }
+
+  test("direct realizability avoids exponential enumeration and invalid DAGs fail explicitly") {
+    val dag = LtlText.parse(readExample("examples/ltl/two_var__same_letter_before__sigma-32.ltl"))
+    val reduced = DirectSummary.generate(dag)
+    assert(reduced.supportCells >= BigInt(2).pow(32))
+    assert(reduced.retainedCells <= 33)
+    intercept[AigerError](DirectSummary.generate(dag, false))
+    val cycle = dag.copy(definitions = VectorMap("x" -> Formula.Reference("x", Position.I)),
+      output = Formula.Reference("x", Position.I))
+    intercept[AigerError](DirectSummary.generate(cycle))
+    intercept[AigerError](DirectSummary.generate(dag.copy(output = Formula.Atom(AtomKind.EosAtom, Position.I, None))))
+  }
+
+  test("shared LTL eliminates only realizable cases and preserves named DAG sharing") {
+    import Formula.*
+    val dag = LtlText.parse(readExample("examples/ltl/two_var__same_letter_before__sigma-32.ltl"))
+    val translated = SharedOneVariableLtl.translate(dag)
+    assert(translated.supportCases >= BigInt(2).pow(32))
+    assert(translated.retainedCases <= 33)
+    val circuit = DirectSummary.generate(translated.dag, false)
+    assertEquals(circuit.maxSupport, 0)
+    intercept[TwoLtlToOneVariable.TranslationTooLarge](SharedOneVariableLtl.translate(dag, false))
+    // Recursive inlining would make this diamond exponentially large.
+    var defs = VectorMap[String, Formula]("p0" -> Atom(AtomKind.SymbolAtom, Position.I, Some("a")))
+    for i <- 1 to 80 do
+      val r = Reference(s"p${i-1}", Position.I)
+      defs = defs.updated(s"p$i", Disjunction(List(r, Negation(r))))
+    val shared = dag.copy(definitions = defs, output = Reference("p80", Position.I), alphabet = Some(List("a", "b")))
+    val result = SharedOneVariableLtl.translate(shared)
+    assertEquals(result.dag.definitions.size, 81)
+    assertEquals(DirectSummary.generate(result.dag).rows, 0)
+    val cycle = shared.copy(definitions = VectorMap("x" -> Reference("x", Position.I)), output = Reference("x", Position.I))
+    intercept[TwoLtlToOneVariable.TranslationTooLarge](SharedOneVariableLtl.translate(cycle))
+  }
+
+  test("shared LTL keeps temporal coordinates free in the realizability cover") {
+    import Formula.*
+    val defs = VectorMap[String, Formula](
+      "a" -> Atom(AtomKind.SymbolAtom, Position.I, Some("a")),
+      "not_a" -> Negation(Reference("a", Position.I)),
+      "past" -> Once(Position.I, Position.J, Reference("a", Position.J)))
+    val output = Since(Position.I, Position.J,
+      Disjunction(List(Reference("a", Position.I), Reference("past", Position.I))),
+      Conjunction(List(Reference("not_a", Position.I), Reference("a", Position.J))))
+    val dag = FormulaDag(Logic.PastStrict, defs, output, "final", alphabet = Some(List("a", "b")))
+    val result = SharedOneVariableLtl.translate(dag)
+    assertEquals(result.supportCases, BigInt(9)) // one lower row, eight top cases
+    assertEquals(result.retainedCases, BigInt(5)) // two static patterns x two free values
+    for n <- 1 to 4; w <- wordsOfLength(n, List("a", "b")) do
+      assertEquals(Ltl.evaluate(result.dag, w.toIndexedSeq), Ltl.evaluate(dag, w.toIndexedSeq))
+  }

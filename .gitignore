@@ -20,11 +20,18 @@ logs/
 # IDE
 .idea/
 .vscode/
+iclr-circuit/
+tmp/
 *.iml
 docs/
+results/
+
 iclr/
 # OS
 .DS_Store
 
 # ABC shell history, written into the cwd on every run
 abc.history
+
+# Locally downloaded NuSMV distribution and smoke-test scratch files
+/tmp/nusmv/

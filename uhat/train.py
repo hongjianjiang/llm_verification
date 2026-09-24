@@ -9,11 +9,20 @@ pushes intermediate activations toward 0/1; the hard phase switches to argmax
 gates and straight-through binarised activations, so the last stretch of
 training optimises the discrete program that will actually be extracted.
 That is what makes extraction faithful rather than hopeful.
+
+The hard phase's gradient comes from `--hard-loss`.  The default,
+'surrogate', runs the hard model forward and differentiates the soft one.
+'legacy' is the loss every run before 2026-09-23 used: a clamped BCE on an
+output that is exactly 0 or 1, whose gradient is exactly zero, so in those
+runs the hard phase never changed a parameter and the extracted program is
+the argmax readout of the soft phase.  Whichever mode is used, the best hard
+model seen in the hard phase is returned rather than the last one.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import random
 import subprocess
@@ -33,6 +42,30 @@ from .programs import program_task
 from .tasks import TASKS, Task, datasets, iid_split, population_upto, resolve
 
 _EPS = 1e-6
+
+
+HARD_LOSSES = ("legacy", "straight_through", "surrogate")
+
+
+def probability_loss(acceptance, labels, weights, *, hard=False, mode="surrogate"):
+    """Keep finite BCE values while preserving the hard model's surrogate gradients.
+
+    In the hard phase `acceptance` is exactly 0 or 1, so a plain clamp has
+    zero gradient everywhere and the phase never moves ('legacy').  The other
+    modes take the loss value from the clamped probability and let the
+    gradient through the unclamped one.
+    """
+    if mode not in HARD_LOSSES:
+        raise ValueError(f"unknown hard loss: {mode}")
+    probabilities = acceptance.clamp(_EPS, 1 - _EPS)
+    if hard and mode != "legacy":
+        probabilities = probabilities.detach() + (acceptance - acceptance.detach())
+    return nn.functional.binary_cross_entropy(probabilities, labels, weight=weights)
+
+
+def batched_accepts(model, words, batch=64):
+    return [answer for start in range(0, len(words), batch)
+            for answer in model_accepts(model, words[start:start + batch])]
 
 
 @dataclass
@@ -78,6 +111,18 @@ def train_once(
 
     hard_start = int(schedule.steps * (1 - schedule.hard_fraction))
     optimiser = torch.optim.Adam(model.parameters(), lr=schedule.lr)
+    full_batch = not (schedule.batch and schedule.batch < len(words))
+
+    # Once the hard phase trains, it can also make things worse, so keep the
+    # best hard model seen.  The first hard step measures the argmax readout of
+    # the soft phase, so the result is never worse than not training hard.
+    best_accuracy, best_state = -1.0, None
+
+    def consider(accuracy: float) -> None:
+        nonlocal best_accuracy, best_state
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_state = copy.deepcopy(model.state_dict())
 
     for step in range(schedule.steps):
         hard = step >= hard_start
@@ -92,10 +137,24 @@ def train_once(
         else:
             rows = slice(None)
 
-        acceptance, features = model(tokens[rows], lengths[rows], tau=tau, hard=hard)
-        loss = nn.functional.binary_cross_entropy(
-            acceptance.clamp(_EPS, 1 - _EPS), labels[rows], weight=weights[rows]
-        )
+        if hard and schedule.hard_loss == "surrogate":
+            # Forward through the hard model, backward through the soft one.
+            # Differentiating the hard model itself evaluates every AND/OR at
+            # exact 0/1, where a single false literal (or a second true term)
+            # zeroes the gradient of all the others.
+            with torch.no_grad():
+                exact, _ = model(tokens[rows], lengths[rows], tau=tau, hard=True)
+            relaxed, features = model(tokens[rows], lengths[rows], tau=tau, hard=False)
+            acceptance = exact + (relaxed - relaxed.detach())
+        else:
+            acceptance, features = model(tokens[rows], lengths[rows], tau=tau, hard=hard)
+        if hard and full_batch:
+            with torch.no_grad():
+                consider(_accuracy((acceptance > 0.5).tolist(), labels))
+        elif hard and (step == hard_start or step % schedule.log_every == 0):
+            consider(_accuracy(batched_accepts(model, words), labels))
+        loss = probability_loss(acceptance, labels[rows], weights[rows],
+                                hard=hard, mode=schedule.hard_loss)
         if not hard and features.shape[-1] > base_width:
             derived = features[..., base_width:]
             mask = valid[rows].unsqueeze(-1).float()
@@ -110,14 +169,17 @@ def train_once(
 
         if verbose and (step % schedule.log_every == 0 or step == schedule.steps - 1):
             with torch.no_grad():
-                hard_acc = _accuracy(model_accepts(model, words), labels)
+                hard_acc = _accuracy(batched_accepts(model, words), labels)
             phase = "hard" if hard else f"soft tau={tau:.2f}"
             print(
                     f"  step {step:5d}  loss {loss.item():.4f}  hard-acc {hard_acc:.4f}  [{phase}]",
                     flush=True,
                 )
 
-    final = _accuracy(model_accepts(model, words), labels)
+    final = _accuracy(batched_accepts(model, words), labels)
+    if best_state is not None and best_accuracy > final:
+        model.load_state_dict(best_state)
+        final = _accuracy(batched_accepts(model, words), labels)
     return Fit(model, final, float(loss.item()), seed)
 
 
@@ -146,22 +208,35 @@ def fit_best(
 def jar_check(
     jar: str, path: Path, program: brasp.Program, words: Sequence[Sequence[str]]
 ) -> list[str]:
-    """Round-trip a sample of words through the Scala evaluator."""
-    mismatches = []
-    for word in words:
-        if not word:
-            continue  # `--word ''` has no spelling on the command line
-        text = "".join(word) if all(len(s) == 1 for s in word) else " ".join(word)
+    """Words where the Scala Boolean automaton and the Python evaluator disagree.
+
+    `--boolean-automaton` matters: without it `--word` evaluates the LTL DAG,
+    not the automaton that `--equivalent --run-abc` goes on to prove things
+    about, so the check would miss exactly the link it exists to cover.
+    """
+    import tempfile
+
+    texts = ["".join(w) if all(len(s) == 1 for s in w) else " ".join(w) for w in words]
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+        handle.write("".join(text + "\n" for text in texts))
+        listing = handle.name
+    try:
         result = subprocess.run(
-            ["java", "-jar", jar, str(path), "--word", text],
+            ["java", "-jar", jar, str(path), "--boolean-automaton", "--words", listing],
             capture_output=True,
             text=True,
             check=True,
         )
-        answer = result.stdout.strip() == "true"
-        if answer != brasp.accepts(program, word):
-            mismatches.append(text)
-    return mismatches
+    finally:
+        Path(listing).unlink(missing_ok=True)
+    answers = result.stdout.split()
+    if len(answers) != len(words):
+        raise RuntimeError(f"jar answered {len(answers)} of {len(words)} words")
+    return [
+        text
+        for text, word, answer in zip(texts, words, answers)
+        if (answer == "true") != brasp.accepts(program, word)
+    ]
 
 
 def _enumerate_budget(alphabet: Sequence[str], requested: int, budget: int = 1200) -> int:
@@ -194,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hard-lr", type=float, default=0.01)
+    parser.add_argument("--hard-loss", choices=HARD_LOSSES, default="surrogate")
     parser.add_argument("--hard-fraction", type=float, default=0.25)
     parser.add_argument(
         "--split",
@@ -267,6 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hard_fraction=args.hard_fraction,
         lr=args.lr,
         hard_lr=args.hard_lr,
+        hard_loss=args.hard_loss,
         seed=args.seed,
         batch=args.batch,
         restarts=args.restarts,
@@ -350,6 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "heads": args.heads,
             "terms": args.terms,
             "steps": args.steps,
+            "hard_loss": args.hard_loss,
             "restarts": args.restarts,
             "seed": args.seed,
             "best_seed": fit.seed,
@@ -372,12 +450,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if path is None:
             path = Path("uhat_extracted.brasp")
             path.write_text(text)
-        rng = random.Random(args.seed)
-        sample = rng.sample(list(test_words), min(8, len(test_words)))
+        # Every word the model was checked on, including the empty word (which
+        # the proof itself excludes), so model = Python = Scala on all of them.
+        sample = list(train_words) + list(test_words)
         mismatches = jar_check(args.jar, path, program, sample)
         print(f"jar round-trip on {len(sample)} words: {len(mismatches)} mismatches")
         if mismatches:
-            print(f"  first mismatch: {mismatches[0]}")
+            print(f"  first mismatch: {mismatches[0] or '<empty>'}")
             return 1
 
     return 0 if (not disagreements and test_accuracy == 1.0) else 0

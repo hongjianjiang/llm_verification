@@ -200,7 +200,8 @@ object BooleanAutomaton:
     * below the largest `sigma` that measured cheap (`sigma=15`, `totalWork`
     * ≈ 491,970).
     */
-  private val maxTotalWork = BigInt(500_000)
+  // -Dpvwaa.maxTotalWork=N raises the guard for scaling studies; the default is what the paper reports.
+  private val maxTotalWork = BigInt(sys.props.getOrElse("pvwaa.maxTotalWork", "500000"))
 
   def checkSupportSize(automaton: ReverseBooleanAutomaton): Unit =
     val cellLimit = BigInt(2).pow(maxLocalSupport)

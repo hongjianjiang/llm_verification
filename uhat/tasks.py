@@ -285,6 +285,311 @@ def dot_depth_task(k: int, sigma: int) -> Task:
 
 
 _DOT_DEPTH = re.compile(r"^dot_depth__k-(\d+)__sigma-(\d+)$")
+_FIGURE2 = re.compile(
+    r"^figure2_(dot|y|no2a|slb|mono_word|since|marks|same|lms)__(k|sigma|n)-(\d+)$"
+)
+
+
+def _paired_sampler(positive, negative):
+    """Return equal numbers of constructed positives and boundary negatives."""
+
+    def sample(alphabet, count, min_length, max_length, rng):
+        words = []
+        for index in range(count):
+            make = positive if index % 2 == 0 else negative
+            words.append(tuple(make(alphabet, min_length, max_length, rng)))
+        rng.shuffle(words)
+        return words
+
+    return sample
+
+
+def _figure2_task(family: str, parameter: int) -> Task:
+    """Small, balanced training tasks corresponding to the Figure 2 families.
+
+    Figure 2 deliberately uses parameters far beyond trainable UHAT depths.
+    These tasks keep the language definitions but use samplers that expose both
+    labels at small parameters; generic uniform sampling is nearly constant for
+    same-letter-before, Since, and the counting families.
+    """
+    if parameter < 1:
+        raise KeyError("Figure 2 parameters must be positive")
+
+    if family in {"dot", "y", "no2a", "marks", "same"}:
+        k = parameter
+
+    if family == "dot":
+        alphabet = ("a", "b")
+        pattern = dot_depth_pattern(k, alphabet)
+        return Task(
+            f"figure2_dot__k-{k}", alphabet,
+            lambda word, pattern=pattern: contains_subsequence(word, pattern),
+            sampler=block_sampler(2 * k + 2),
+            lengths=(min(6, max(3, k)), (max(1, k), 4 * k + 4), (4 * k + 5, 8 * k + 8)),
+        )
+
+    if family == "y":
+        alphabet = ("a", "b")
+
+        def predicate(word):
+            return len(word) > k and word[-k - 1] == "a"
+
+        def make(label):
+            def construct(_alphabet, lo, hi, rng):
+                length = rng.randint(max(lo, k + 1), max(hi, k + 1))
+                word = [rng.choice(alphabet) for _ in range(length)]
+                word[-k - 1] = "a" if label else "b"
+                return word
+            return construct
+
+        return Task(
+            f"figure2_y__k-{k}", alphabet, predicate,
+            sampler=_paired_sampler(make(True), make(False)),
+            lengths=(min(6, k), (k + 1, 3 * k + 6), (3 * k + 7, 6 * k + 12)),
+        )
+
+    if family == "no2a":
+        alphabet = ("a", "b")
+
+        def predicate(word):
+            # The outer strict-H is evaluated at the final input position, so
+            # a forbidden pair must end before the final symbol.
+            return not any(
+                right >= k and word[right] == word[right - k] == "a"
+                for right in range(len(word) - 1)
+            )
+
+        def positive(_alphabet, lo, hi, rng):
+            length = rng.randint(max(lo, k + 2), max(hi, k + 2))
+            word = ["b"] * length
+            word[rng.randrange(length)] = "a"
+            return word
+
+        def negative(_alphabet, lo, hi, rng):
+            length = rng.randint(max(lo, k + 2), max(hi, k + 2))
+            left = rng.randrange(0, length - k - 1)
+            word = [rng.choice(alphabet) for _ in range(length)]
+            word[left] = word[left + k] = "a"
+            return word
+
+        return Task(
+            f"figure2_no2a__k-{k}", alphabet, predicate,
+            sampler=_paired_sampler(positive, negative),
+            lengths=(min(5, k), (k + 2, 3 * k + 8), (3 * k + 9, 6 * k + 16)),
+        )
+
+    if family in {"slb", "mono_word", "since"}:
+        sigma = parameter
+        letters = tuple(f"s{index}" for index in range(sigma))
+
+    if family == "slb":
+        def predicate(word):
+            return bool(word) and word[-1] in word[:-1]
+
+        def positive(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            word = [rng.choice(letters) for _ in range(length)]
+            word[rng.randrange(length - 1)] = word[-1]
+            return word
+
+        def negative(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            final = rng.choice(letters)
+            others = [letter for letter in letters if letter != final]
+            return [rng.choice(others)] * (length - 1) + [final]
+
+        return Task(
+            f"figure2_slb__sigma-{sigma}", letters, predicate,
+            sampler=_paired_sampler(positive, negative),
+            lengths=(3 if sigma <= 4 else 2, (2, 16), (17, 40)),
+        )
+
+    if family == "mono_word":
+        rank = {letter: index for index, letter in enumerate(letters)}
+
+        def predicate(word):
+            return bool(word) and all(rank[symbol] < rank[word[-1]] for symbol in word[:-1])
+
+        def positive(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            final_rank = rng.randrange(1, sigma)
+            return [rng.choice(letters[:final_rank]) for _ in range(length - 1)] + [letters[final_rank]]
+
+        def negative(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            final_rank = rng.randrange(sigma)
+            word = [rng.choice(letters) for _ in range(length - 1)] + [letters[final_rank]]
+            word[rng.randrange(length - 1)] = rng.choice(letters[final_rank:])
+            return word
+
+        return Task(
+            f"figure2_mono_word__sigma-{sigma}", letters, predicate,
+            sampler=_paired_sampler(positive, negative),
+            lengths=(3 if sigma <= 4 else 2, (2, 16), (17, 40)),
+        )
+
+    if family == "since":
+        alphabet = ("marker", *letters)
+
+        def predicate(word):
+            return bool(word) and any(
+                symbol == "marker" and all(middle == word[-1] for middle in word[index + 1:-1])
+                for index, symbol in enumerate(word[:-1])
+            )
+
+        def positive(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            final = rng.choice(letters)
+            marker = rng.randrange(length - 1)
+            return (
+                [rng.choice(alphabet) for _ in range(marker)]
+                + ["marker"] + [final] * (length - marker - 1)
+            )
+
+        def negative(_alphabet, lo, hi, rng):
+            length = rng.randint(max(2, lo), max(2, hi))
+            return [rng.choice(letters) for _ in range(length)]
+
+        return Task(
+            f"figure2_since__sigma-{sigma}", alphabet, predicate,
+            sampler=_paired_sampler(positive, negative),
+            lengths=(3 if sigma <= 3 else 2, (2, 16), (17, 40)),
+        )
+
+    if family == "marks":
+        alphabet = ("a", "m")
+
+        def predicate(word):
+            return word.count("m") >= k
+
+        def make(label):
+            def construct(_alphabet, lo, hi, rng):
+                length = rng.randint(max(lo, k + 1), max(hi, k + 1))
+                count = k if label else rng.randrange(k)
+                word = ["a"] * length
+                for index in rng.sample(range(length), count):
+                    word[index] = "m"
+                return word
+            return construct
+
+        return Task(
+            f"figure2_marks__k-{k}", alphabet, predicate,
+            sampler=_paired_sampler(make(True), make(False)),
+            lengths=(min(6, k), (k + 1, 3 * k + 8), (3 * k + 9, 6 * k + 16)),
+        )
+
+    if family == "same":
+        alphabet = ("a", "b", "m")
+
+        def predicate(word):
+            markers = 0
+            qualifying = []
+            for position, symbol in enumerate(word, 1):
+                if symbol == "m":
+                    markers += 1
+                    if markers >= k and position < len(word):
+                        qualifying.append(position)
+            if not qualifying or qualifying[-1] <= 1:
+                return False
+            return word[qualifying[-1] - 2] == word[-1]
+
+        def positive(_alphabet, lo, hi, rng):
+            length = rng.randint(max(lo, k + 3), max(hi, k + 3))
+            final = rng.choice(("a", "b"))
+            word = [rng.choice(("a", "b")) for _ in range(length)]
+            word[-1] = final
+            word[-2] = "m"
+            word[-3] = final
+            for index in range(k - 1):
+                word[index] = "m"
+            return word
+
+        def negative(_alphabet, lo, hi, rng):
+            length = rng.randint(max(lo, k + 3), max(hi, k + 3))
+            word = [rng.choice(("a", "b")) for _ in range(length)]
+            for index in range(k - 1):
+                word[index] = "m"
+            return word
+
+        return Task(
+            f"figure2_same__k-{k}", alphabet, predicate,
+            sampler=_paired_sampler(positive, negative),
+            lengths=(min(5, k), (k + 3, 3 * k + 10), (3 * k + 11, 6 * k + 20)),
+        )
+
+    if family == "lms":
+        # LMS'02 Thm. 3.3 flattened into blocks `sep b_0 b_1 ... b_n`
+        # (scripts/lms_blocks.py): any two blocks agreeing on b_1..b_n agree on b_0.
+        n = parameter
+        alphabet = ("b0", "b1", "sep")
+        width = n + 2
+
+        def blocks(word):
+            if not word or len(word) % width:
+                return None
+            chunks = [word[s:s + width] for s in range(0, len(word), width)]
+            if any(c[0] != "sep" or "sep" in c[1:] for c in chunks):
+                return None
+            return chunks
+
+        def predicate(word):
+            chunks = blocks(tuple(word))
+            if chunks is None:
+                return False
+            seen = {}
+            return all(seen.setdefault(tuple(c[2:]), c[1]) == c[1] for c in chunks)
+
+        def count(lo, hi, rng):
+            return rng.randint(max(1, lo // width), max(1, hi // width))
+
+        def positive(_alphabet, lo, hi, rng):
+            output = {}
+            word = []
+            for _ in range(count(lo, hi, rng)):
+                inputs = tuple(rng.choice(("b0", "b1")) for _ in range(n))
+                word += ["sep", output.setdefault(inputs, rng.choice(("b0", "b1"))), *inputs]
+            return word
+
+        def negative(_alphabet, lo, hi, rng):
+            if rng.random() < 0.5:
+                # Well formed, with one conflicting pair of blocks.
+                word = positive(_alphabet, max(lo, 2 * width), max(hi, 2 * width), rng)
+                chunks = [word[s:s + width] for s in range(0, len(word), width)]
+                first, second = rng.sample(range(len(chunks)), 2)
+                chunks[second] = ["sep", "b1" if chunks[first][1] == "b0" else "b0", *chunks[first][2:]]
+                return [symbol for chunk in chunks for symbol in chunk]
+            # Malformed: one symbol changed, inserted, or deleted.
+            word = positive(_alphabet, lo, hi, rng)
+            position = rng.randrange(len(word))
+            edit = rng.randrange(3)
+            if edit == 0:
+                word[position] = rng.choice([s for s in alphabet if s != word[position]])
+            elif edit == 1:
+                word.insert(position, rng.choice(alphabet))
+            elif len(word) > 1:
+                del word[position]
+            return word
+
+        def paired(alphabet_, count_, lo, hi, rng):
+            # Resample the rare mutations that happen to stay in the language.
+            words = []
+            for index in range(count_):
+                label = index % 2 == 0
+                make = positive if label else negative
+                word = tuple(make(alphabet_, lo, hi, rng))
+                while predicate(word) != label:
+                    word = tuple(make(alphabet_, lo, hi, rng))
+                words.append(word)
+            rng.shuffle(words)
+            return words
+
+        return Task(
+            f"figure2_lms__n-{n}", alphabet, predicate,
+            sampler=paired,
+            lengths=(3, (width, 4 * width), (5 * width, 8 * width)),
+        )
+
+    raise KeyError(f"unknown Figure 2 family {family!r}")
 
 
 def resolve(name: str) -> Task:
@@ -299,6 +604,14 @@ def resolve(name: str) -> Task:
         if k < 1 or sigma < 2:
             raise KeyError(f"{name}: need k >= 1 and sigma >= 2")
         return dot_depth_task(k, sigma)
+    match = _FIGURE2.match(name)
+    if match:
+        family, axis, raw_parameter = match.groups()
+        expected_axis = ("sigma" if family in {"slb", "mono_word", "since"}
+                         else "n" if family == "lms" else "k")
+        if axis != expected_axis:
+            raise KeyError(f"{name}: {family} uses parameter {expected_axis}")
+        return _figure2_task(family, int(raw_parameter))
     raise KeyError(
         f"unknown task {name!r}; expected one of {', '.join(sorted(TASKS))} "
         f"or dot_depth__k-<K>__sigma-<S>"
